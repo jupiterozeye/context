@@ -1,27 +1,104 @@
 # Context
 
-Terminal context capture tool for AI-assisted debugging. Simplifies sharing terminal context with AI without manual copy-pasting.
+A terminal context capture tool that simplifies sharing your terminal context with AI assistants.
+
+No more copy-pasting! Context automatically captures directory structures and command outputs, then copies them to your clipboard for easy sharing with AI tools.
 
 ## Features
 
 - **`context dir [path]`** - Generate directory tree and copy to clipboard
 - **`context last [n]`** - Copy last n terminal outputs to clipboard
+- **`context init`** - Show shell integration setup instructions
+- **`context version`** - Show version information
 - Cross-platform clipboard support (Linux, macOS, Windows)
+- Multiple output formats: tree, JSON, markdown
 - Shell integration for Bash, Zsh, and Fish
-- Nix flake support
+- Nix flake support for easy installation
+
+## Why Use Context?
+
+Sharing terminal context with AI assistants usually means:
+1. Running `ls -R` or `tree` and copy-pasting
+2. Scrolling up to find command output and copy-pasting
+3. Repeating this process multiple times
+
+**Context automates this:** Just run `context dir` or `context last 3` and everything is copied to your clipboard, ready to paste into ChatGPT, Claude, or any AI assistant.
+
+## Quick Start
+
+```bash
+# Try it without installing (requires Nix with flakes)
+nix run github:jupiterozeye/context -- dir ~/projects
+
+# Or install it
+nix profile install github:jupiterozeye/context
+
+# Set up shell integration (required for 'context last')
+context init  # Shows setup instructions
+```
+
+**Common workflows:**
+```bash
+# Share your project structure with AI
+context dir ~/my-project
+
+# Share the last error message you got
+context last
+
+# Share multiple command outputs for debugging
+context last 5 --format markdown
+```
 
 ## Installation
 
-### Using Nix (Recommended)
+### Method 1: Using Nix (Recommended)
 
+**One-off usage (no installation):**
 ```bash
-# Build and install to your profile
-nix profile install github:jupiterozeye/context
-
-# Or run without installing (one-off usage)
 nix run github:jupiterozeye/context -- dir ~/projects
 nix run github:jupiterozeye/context -- last 3
 ```
+
+**Install to your profile:**
+```bash
+nix profile install github:jupiterozeye/context
+```
+
+### Method 2: From Source (requires Go)
+
+```bash
+# Clone and build
+git clone https://github.com/jupiterozeye/context.git
+cd context
+go build -o context ./cmd/context
+
+# Install to ~/.local/bin (recommended)
+mkdir -p ~/.local/bin ~/.local/share/context/shell
+cp context ~/.local/bin/
+cp -r shell/* ~/.local/share/context/shell/
+
+# Make sure ~/.local/bin is in your PATH
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
+source ~/.bashrc
+```
+
+### Method 3: Using Make (from source)
+
+```bash
+git clone https://github.com/jupiterozeye/context.git
+cd context
+
+# Install to ~/.local (recommended for NixOS users)
+make build
+mkdir -p ~/.local/bin ~/.local/share/context/shell
+cp context ~/.local/bin/
+cp -r shell/* ~/.local/share/context/shell/
+
+# Or install system-wide (requires sudo, not recommended for NixOS)
+sudo make install
+```
+
+## Advanced Installation
 
 ### NixOS Configuration (flakes)
 
@@ -99,110 +176,77 @@ Or in your `configuration.nix` (if using specialArgs):
 }
 ```
 
-### From Source
 
-```bash
-git clone https://github.com/jupiterozeye/context.git
-cd context
-go build -o context ./cmd/context
-
-# Option 1: Install to /usr/local/bin (traditional Linux)
-sudo mkdir -p /usr/local/bin /usr/local/share/context/shell
-sudo cp context /usr/local/bin/
-sudo cp -r shell/* /usr/local/share/context/shell/
-
-# Option 2: Install to ~/.local/bin (recommended for NixOS and user installs)
-mkdir -p ~/.local/bin ~/.local/share/context/shell
-cp context ~/.local/bin/
-cp -r shell/* ~/.local/share/context/shell/
-
-# Make sure ~/.local/bin is in your PATH
-echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
-```
-
-**Note for NixOS users:** NixOS doesn't use `/usr/local`. Use Option 2 (`~/.local/bin`) or prefer the Nix/NixOS installation methods above.
 
 ## Setup
 
 ### Shell Integration (Required for `context last`)
 
-The shell integration captures command output so `context last` can access it. Choose the appropriate path based on your installation method:
+The shell integration captures command output so `context last` can access it.
 
-**For Nix profile installs** (`nix profile install`):
+**Quick setup:** Run `context init` to see setup instructions for your installation method.
+
+**Manual setup:**
+
+Choose the appropriate path based on how you installed:
+
+| Installation Method | Shell Config Location | Command to Add |
+|---------------------|----------------------|----------------|
+| Nix profile install | `~/.bashrc` / `~/.zshrc` | `source ~/.nix-profile/share/context/shell/context.bash` |
+| From source / Make | `~/.bashrc` / `~/.zshrc` | `source ~/.local/share/context/shell/context.bash` |
+| System-wide (`sudo make install`) | `~/.bashrc` / `~/.zshrc` | `source /usr/local/share/context/shell/context.bash` |
+
+Replace `.bash` with `.zsh` for Zsh or `.fish` for Fish shell, and update the config file location accordingly.
+
+**Apply changes:**
 ```bash
-# Bash (~/.bashrc)
-source ~/.nix-profile/share/context/shell/context.bash
-
-# Zsh (~/.zshrc)
-source ~/.nix-profile/share/context/shell/context.zsh
-
-# Fish (~/.config/fish/config.fish)
-source ~/.nix-profile/share/context/shell/context.fish
-```
-
-**For system-wide installs** (`make install` or manual to `/usr/local`):
-```bash
-# Bash (~/.bashrc)
-source /usr/local/share/context/shell/context.bash
-
-# Zsh (~/.zshrc)
-source /usr/local/share/context/shell/context.zsh
-
-# Fish (~/.config/fish/config.fish)
-source /usr/local/share/context/shell/context.fish
-```
-
-**For local installs** (manual to `~/.local`):
-```bash
-# Bash (~/.bashrc)
-source ~/.local/share/context/shell/context.bash
-
-# Zsh (~/.zshrc)
-source ~/.local/share/context/shell/context.zsh
-
-# Fish (~/.config/fish/config.fish)
-source ~/.local/share/context/shell/context.fish
-```
-
-**For local development** (from repo):
-```bash
-# Bash (~/.bashrc)
-source /path/to/context/shell/context.bash
-```
-
-Then restart your terminal or run:
-```bash
-source ~/.bashrc  # or ~/.zshrc, etc.
+source ~/.bashrc  # or ~/.zshrc, ~/.config/fish/config.fish
 ```
 
 ## Usage
 
-### Directory Tree
+### Command: `context dir`
 
+Generate a directory tree and copy it to your clipboard.
+
+**Examples:**
 ```bash
-# Current directory
+# Current directory (tree format)
 context dir
 
 # Specific directory
 context dir ~/projects/myproject
 
-# With options
+# Limit depth and exclude patterns
 context dir ~/projects --depth 2 --exclude "node_modules,.git"
-context dir ~/projects -d 2 -e "node_modules,.git"
 
-# One-off with nix (no install needed)
-nix run github:jupiterozeye/context -- dir ~/projects
+# JSON format (great for AI analysis)
+context dir --format json
+
+# Markdown format (great for documentation)
+context dir --format markdown
+
+# Include hidden files
+context dir --hidden
+
+# Just print, don't copy to clipboard
+context dir --no-copy
 ```
 
 **Options:**
-- `-d, --depth int` - Max depth (0 = unlimited)
-- `-e, --exclude string` - Comma-separated patterns to exclude
-- `-H, --hidden` - Include hidden files
-- `-f, --format string` - Output format: tree|json|markdown (default: tree)
-- `-c, --no-copy` - Print only, don't copy to clipboard
+| Flag | Short | Description | Default |
+|------|-------|-------------|---------|
+| `--depth` | `-d` | Maximum depth (0 = unlimited) | `0` |
+| `--exclude` | `-e` | Comma-separated patterns to exclude | `""` |
+| `--hidden` | `-H` | Include hidden files | `false` |
+| `--format` | `-f` | Output format: `tree`, `json`, or `markdown` | `tree` |
+| `--no-copy` | `-c` | Print only, don't copy to clipboard | `false` |
 
-### Terminal History
+### Command: `context last`
 
+Copy recent command outputs to your clipboard. Requires shell integration setup.
+
+**Examples:**
 ```bash
 # Copy last command output
 context last
@@ -210,34 +254,78 @@ context last
 # Copy last 3 command outputs
 context last 3
 
-# With options
+# Markdown format (great for AI)
 context last 5 --format markdown
 
-# One-off with nix (requires shell setup first)
-nix run github:jupiterozeye/context -- last 3
+# Just print, don't copy to clipboard
+context last --no-copy
 ```
 
 **Options:**
-- `-r, --raw` - Raw output without formatting
-- `-f, --format string` - Output format: raw|command|markdown (default: raw)
-- `-c, --no-copy` - Print only, don't copy to clipboard
+| Flag | Short | Description | Default |
+|------|-------|-------------|---------|
+| `--format` | `-f` | Output format: `raw`, `command`, or `markdown` | `raw` |
+| `--raw` | `-r` | Raw output without formatting | `false` |
+| `--no-copy` | `-c` | Print only, don't copy to clipboard | `false` |
+
+### Other Commands
+
+```bash
+# Show shell integration setup instructions
+context init
+
+# Show version
+context version
+
+# Show help
+context --help
+context dir --help
+```
 
 ## How It Works
 
-### `context dir`
+**`context dir`**: Walks the directory tree and generates output in your chosen format (tree/JSON/markdown), then copies it to your clipboard.
 
-Walks the directory tree and generates a formatted tree structure, similar to the Unix `tree` command. The output is automatically copied to your clipboard.
+**`context last`**: Shell integration hooks capture command outputs to `~/.local/share/context/history.jsonl`. The `context last` command reads this history and copies recent outputs to your clipboard.
 
-### `context last`
+## Troubleshooting
 
-The shell integration scripts hook into your shell's preexec/precmd hooks to capture:
-- The command that was run
-- The command's output (base64 encoded)
-- Exit code
-- Working directory
-- Timestamp
+### `context last` says "history file not found"
 
-This data is stored in `~/.local/share/context/history.jsonl` and read by the `context last` command.
+You need to set up shell integration first:
+
+1. Run `context init` to see setup instructions
+2. Add the appropriate `source` command to your shell config
+3. Restart your terminal or run `source ~/.bashrc` (or `~/.zshrc`)
+4. Run a few commands to build up history
+5. Try `context last` again
+
+### Command not found
+
+Make sure the installation directory is in your PATH:
+
+```bash
+# For ~/.local/bin installs
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
+source ~/.bashrc
+
+# Verify it's working
+which context
+```
+
+### Clipboard not working
+
+Context uses platform-specific clipboard tools:
+- **Linux**: `xclip` or `xsel` (install via your package manager)
+- **macOS**: `pbcopy` (built-in)
+- **Windows**: `clip` (built-in)
+
+### NixOS: "cannot run dynamically linked executable"
+
+If you built with `go build`, the binary won't work on NixOS. Use one of these instead:
+- `nix build` to build with Nix
+- `go run ./cmd/context` to run directly
+- `nix profile install` to install via Nix
 
 ## Development
 

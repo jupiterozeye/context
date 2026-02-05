@@ -15,7 +15,7 @@ var initCmd = &cobra.Command{
 	Short: "Print shell integration setup instructions",
 	Long:  `Print instructions for setting up shell integration to enable the 'context last' command.`,
 	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Println(`Shell Integration Setup
+		fmt.Print(`Shell Integration Setup
 ========================
 
 To enable 'context last', add one of the following to your shell config:

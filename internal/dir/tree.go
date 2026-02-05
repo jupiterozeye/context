@@ -1,6 +1,7 @@
 package dir
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -16,7 +17,7 @@ type Options struct {
 }
 
 type Generator struct {
-	opts   Options
+	opts     Options
 	excludes []string
 }
 
@@ -50,14 +51,22 @@ func (g *Generator) Generate(rootPath string) (string, error) {
 		rootName = filepath.Base(cwd)
 	}
 
-	output := rootName + "/\n"
 	entries, err := g.readDir(rootPath, 1)
 	if err != nil {
 		return "", err
 	}
 
-	output += g.formatTree(entries, "")
-	return output, nil
+	// Format based on requested format
+	switch g.opts.Format {
+	case "json":
+		return g.formatJSON(rootName, entries)
+	case "markdown":
+		return g.formatMarkdown(rootName, entries), nil
+	default: // "tree" or anything else
+		output := rootName + "/\n"
+		output += g.formatTree(entries, "")
+		return output, nil
+	}
 }
 
 type entry struct {
@@ -152,5 +161,58 @@ func (g *Generator) formatTree(entries []entry, prefix string) string {
 		}
 	}
 
+	return result.String()
+}
+
+type jsonEntry struct {
+	Name     string      `json:"name"`
+	Type     string      `json:"type"`
+	Children []jsonEntry `json:"children,omitempty"`
+}
+
+func (g *Generator) formatJSON(rootName string, entries []entry) (string, error) {
+	root := jsonEntry{
+		Name:     rootName,
+		Type:     "directory",
+		Children: g.entriesToJSON(entries),
+	}
+
+	data, err := json.MarshalIndent(root, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal JSON: %w", err)
+	}
+
+	return string(data) + "\n", nil
+}
+
+func (g *Generator) entriesToJSON(entries []entry) []jsonEntry {
+	var result []jsonEntry
+	for _, e := range entries {
+		entryType := "file"
+		if e.isDir {
+			entryType = "directory"
+		}
+
+		je := jsonEntry{
+			Name: e.name,
+			Type: entryType,
+		}
+
+		if len(e.children) > 0 {
+			je.Children = g.entriesToJSON(e.children)
+		}
+
+		result = append(result, je)
+	}
+	return result
+}
+
+func (g *Generator) formatMarkdown(rootName string, entries []entry) string {
+	var result strings.Builder
+	result.WriteString("# Directory Structure: " + rootName + "\n\n")
+	result.WriteString("```\n")
+	result.WriteString(rootName + "/\n")
+	result.WriteString(g.formatTree(entries, ""))
+	result.WriteString("```\n")
 	return result.String()
 }
