@@ -30,12 +30,17 @@ Sharing terminal context with AI assistants usually means:
 # Try it without installing (requires Nix with flakes)
 nix run github:jupiterozeye/context -- dir ~/projects
 
-# Or install it
+# Or install from GitHub
 nix profile install github:jupiterozeye/context
+
+# Or install from local repository (for development)
+nix profile install .
 
 # Set up shell integration (required for 'context last')
 context init  # Shows setup instructions
 ```
+
+**Note:** `nix profile install github:jupiterozeye/context` installs from the remote GitHub repository. If you've cloned the repo and made local changes, use `nix profile install .` or `nix build && ./result/bin/context` to test your changes.
 
 **Common workflows:**
 ```bash
@@ -302,23 +307,75 @@ You need to set up shell integration first:
 
 ### Command not found
 
-Make sure the installation directory is in your PATH:
-
+**After Nix installation:**
+The command should be available immediately. Try opening a new terminal or run:
 ```bash
-# For ~/.local/bin installs
-echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
-source ~/.bashrc
-
-# Verify it's working
+hash -r  # Refresh shell's command cache
 which context
 ```
+
+**For ~/.local/bin installs:**
+Make sure the installation directory is in your PATH:
+```bash
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
+source ~/.bashrc
+which context
+```
+
+### Missing commands (like `context init`)
+
+If you installed from GitHub (`nix profile install github:jupiterozeye/context`) and commands like `init` are missing, it means the GitHub version is older than your local code. 
+
+**Solutions:**
+1. **Push your local changes to GitHub** (if you have commit access):
+   ```bash
+   git push origin main
+   # Wait a moment, then reinstall
+   nix profile remove context
+   nix profile install github:jupiterozeye/context
+   ```
+
+2. **Install from local repository** (for development/testing):
+   ```bash
+   nix profile remove context  # Remove old version
+   nix profile install .       # Install from current directory
+   ```
+
+3. **Use the built binary directly**:
+   ```bash
+   nix build
+   ./result/bin/context init
+   ```
 
 ### Clipboard not working
 
 Context uses platform-specific clipboard tools:
-- **Linux**: `xclip` or `xsel` (install via your package manager)
+- **Linux X11**: `xclip` or `xsel` (install via your package manager)
+- **Linux Wayland**: `wl-clipboard` (install via your package manager)
 - **macOS**: `pbcopy` (built-in)
 - **Windows**: `clip` (built-in)
+
+**Install clipboard tools:**
+
+```bash
+# NixOS/Nix
+nix-env -iA nixpkgs.wl-clipboard  # For Wayland
+nix-env -iA nixpkgs.xclip         # For X11
+
+# Ubuntu/Debian
+sudo apt install wl-clipboard  # For Wayland
+sudo apt install xclip         # For X11
+
+# Fedora
+sudo dnf install wl-clipboard  # For Wayland
+sudo dnf install xclip         # For X11
+
+# Arch
+sudo pacman -S wl-clipboard    # For Wayland
+sudo pacman -S xclip           # For X11
+```
+
+**Note:** The Nix package includes clipboard utilities, but if you installed from source, you'll need to install them separately.
 
 ### NixOS: "cannot run dynamically linked executable"
 
