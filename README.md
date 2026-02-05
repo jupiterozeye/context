@@ -12,14 +12,79 @@ Terminal context capture tool for AI-assisted debugging. Simplifies sharing term
 
 ## Installation
 
-### Using Nix
+### Using Nix (Recommended)
 
 ```bash
-# Build and install
+# Build and install to your profile
 nix profile install github:jupiterozeye/context
 
-# Or run without installing
+# Or run without installing (one-off usage)
 nix run github:jupiterozeye/context -- dir ~/projects
+nix run github:jupiterozeye/context -- last 3
+```
+
+### NixOS Configuration (flakes)
+
+Add to your `flake.nix` inputs:
+
+```nix
+{
+  inputs = {
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    context.url = "github:jupiterozeye/context";
+  };
+
+  outputs = { self, nixpkgs, context, ... }@inputs: {
+    nixosConfigurations.yourhostname = nixpkgs.lib.nixosSystem {
+      system = "x86_64-linux";
+      modules = [
+        {
+          environment.systemPackages = [ context.packages.x86_64-linux.context ];
+          
+          # Optional: Auto-source shell integration for all users
+          programs.bash.interactiveShellInit = ''
+            source ${context.packages.x86_64-linux.context}/share/context/shell/context.bash
+          '';
+          programs.zsh.interactiveShellInit = ''
+            source ${context.packages.x86_64-linux.context}/share/context/shell/context.zsh
+          '';
+        }
+      ];
+    };
+  };
+}
+```
+
+### Home Manager (flakes)
+
+```nix
+{
+  inputs = {
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    home-manager.url = "github:nix-community/home-manager";
+    context.url = "github:jupiterozeye/context";
+  };
+
+  outputs = { nixpkgs, home-manager, context, ... }: {
+    homeConfigurations.username = home-manager.lib.homeManagerConfiguration {
+      pkgs = nixpkgs.legacyPackages.x86_64-linux;
+      modules = [
+        {
+          home.packages = [ context.packages.x86_64-linux.context ];
+          
+          # Shell integration
+          programs.bash.initExtra = ''
+            source ${context.packages.x86_64-linux.context}/share/context/shell/context.bash
+          '';
+          
+          programs.zsh.initExtra = ''
+            source ${context.packages.x86_64-linux.context}/share/context/shell/context.zsh
+          '';
+        }
+      ];
+    };
+  };
+}
 ```
 
 ### From Source
@@ -35,26 +100,41 @@ sudo cp context /usr/local/bin/
 
 ### Shell Integration (Required for `context last`)
 
-To capture terminal output history, add the appropriate line to your shell config:
+The shell integration captures command output so `context last` can access it. Choose the appropriate path based on your installation method:
 
-**Bash** (`~/.bashrc`):
+**For Nix profile installs** (`nix profile install`):
 ```bash
+# Bash (~/.bashrc)
+source ~/.nix-profile/share/context/shell/context.bash
+
+# Zsh (~/.zshrc)
+source ~/.nix-profile/share/context/shell/context.zsh
+
+# Fish (~/.config/fish/config.fish)
+source ~/.nix-profile/share/context/shell/context.fish
+```
+
+**For system-wide installs** (`make install` or manual):
+```bash
+# Bash (~/.bashrc)
 source /usr/local/share/context/shell/context.bash
-```
 
-**Zsh** (`~/.zshrc`):
-```zsh
+# Zsh (~/.zshrc)
 source /usr/local/share/context/shell/context.zsh
+
+# Fish (~/.config/fish/config.fish)
+source /usr/local/share/context/shell/context.fish
 ```
 
-**Fish** (`~/.config/fish/config.fish`):
-```fish
-source /usr/local/share/context/shell/context.fish
+**For local development** (from repo):
+```bash
+# Bash (~/.bashrc)
+source /path/to/context/shell/context.bash
 ```
 
 Then restart your terminal or run:
 ```bash
-source ~/.bashrc  # or ~/.zshrc
+source ~/.bashrc  # or ~/.zshrc, etc.
 ```
 
 ## Usage
@@ -71,6 +151,9 @@ context dir ~/projects/myproject
 # With options
 context dir ~/projects --depth 2 --exclude "node_modules,.git"
 context dir ~/projects -d 2 -e "node_modules,.git"
+
+# One-off with nix (no install needed)
+nix run github:jupiterozeye/context -- dir ~/projects
 ```
 
 **Options:**
@@ -91,6 +174,9 @@ context last 3
 
 # With options
 context last 5 --format markdown
+
+# One-off with nix (requires shell setup first)
+nix run github:jupiterozeye/context -- last 3
 ```
 
 **Options:**
@@ -129,6 +215,10 @@ make test
 
 # Build with Nix
 nix build
+
+# Run with Nix (one-off)
+nix run . -- dir ~/projects
+nix run github:jupiterozeye/context -- dir ~/projects
 ```
 
 ## License

@@ -16,3 +16,11 @@ build/
 *~
 .context/
 history.jsonl
+
+# AI session files
+PLAN.md
+*.plan.md
+.ai-session*
+.conversation*
+notes/
+TODO*
