@@ -2,7 +2,6 @@ package last
 
 import (
 	"bufio"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -22,71 +21,113 @@ func NewReader(opts Options) *Reader {
 	return &Reader{opts: opts}
 }
 
-type HistoryEntry struct {
-	Timestamp int64  `json:"timestamp"`
-	Command   string `json:"command"`
-	Output    string `json:"output"`
-	ExitCode  int    `json:"exit_code"`
-	Pwd       string `json:"pwd"`
-}
-
 func (r *Reader) Read(n int) (string, error) {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("cannot get home directory: %w", err)
 	}
 
-	logPath := filepath.Join(homeDir, ".local", "share", "context", "history.jsonl")
-	
-	file, err := os.Open(logPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return "", fmt.Errorf("history file not found. Run 'context init' for setup instructions")
+	// Try to read from shell history
+	var commands []string
+
+	// Try zsh history first
+	zshHistory := filepath.Join(homeDir, ".zsh_history")
+	if cmds, err := r.readZshHistory(zshHistory, n); err == nil && len(cmds) > 0 {
+		commands = cmds
+	} else {
+		// Try bash history
+		bashHistory := filepath.Join(homeDir, ".bash_history")
+		if cmds, err := r.readBashHistory(bashHistory, n); err == nil && len(cmds) > 0 {
+			commands = cmds
+		} else {
+			return "", fmt.Errorf("no shell history found. Searched for ~/.zsh_history and ~/.bash_history")
 		}
-		return "", fmt.Errorf("cannot read history: %w", err)
-	}
-	defer file.Close()
-
-	var entries []HistoryEntry
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		var entry HistoryEntry
-		if err := json.Unmarshal(scanner.Bytes(), &entry); err != nil {
-			continue
-		}
-		entries = append(entries, entry)
 	}
 
-	if err := scanner.Err(); err != nil {
-		return "", fmt.Errorf("error reading history: %w", err)
-	}
-
-	if len(entries) == 0 {
+	if len(commands) == 0 {
 		return "", fmt.Errorf("no history entries found")
 	}
 
-	start := len(entries) - n
+	return r.formatOutput(commands), nil
+}
+
+func (r *Reader) readZshHistory(path string, n int) ([]string, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	var lines []string
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := scanner.Text()
+		// Zsh history format can be "command" or ": timestamp:0;command"
+		if strings.Contains(line, ";") {
+			parts := strings.SplitN(line, ";", 2)
+			if len(parts) == 2 {
+				line = parts[1]
+			}
+		}
+		line = strings.TrimSpace(line)
+		if line != "" && !strings.HasPrefix(line, "context") {
+			lines = append(lines, line)
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+
+	// Return last n entries
+	start := len(lines) - n
 	if start < 0 {
 		start = 0
 	}
-
-	selected := entries[start:]
-	return r.formatOutput(selected), nil
+	return lines[start:], nil
 }
 
-func (r *Reader) formatOutput(entries []HistoryEntry) string {
+func (r *Reader) readBashHistory(path string, n int) ([]string, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	var lines []string
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line != "" && !strings.HasPrefix(line, "context") {
+			lines = append(lines, line)
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+
+	// Return last n entries
+	start := len(lines) - n
+	if start < 0 {
+		start = 0
+	}
+	return lines[start:], nil
+}
+
+func (r *Reader) formatOutput(commands []string) string {
 	var result strings.Builder
 
-	for i, entry := range entries {
+	for i, cmd := range commands {
 		if r.opts.Raw {
-			result.WriteString(entry.Output)
-			if i < len(entries)-1 {
+			result.WriteString(cmd)
+			if i < len(commands)-1 {
 				result.WriteString("\n")
 			}
 		} else if r.opts.Format == "markdown" {
-			result.WriteString(fmt.Sprintf("### Command: %s\n\n```\n%s\n```\n\n", entry.Command, entry.Output))
+			result.WriteString(fmt.Sprintf("### Command %d\n\n```bash\n%s\n```\n\n", i+1, cmd))
 		} else {
-			result.WriteString(fmt.Sprintf("=== Command: %s ===\n%s\n", entry.Command, entry.Output))
+			result.WriteString(fmt.Sprintf("Command %d: %s\n", i+1, cmd))
 		}
 	}
 

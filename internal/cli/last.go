@@ -17,8 +17,8 @@ var (
 
 var lastCmd = &cobra.Command{
 	Use:   "last [n]",
-	Short: "Copy last n terminal outputs to clipboard",
-	Long:  `Copy the previous terminal command outputs to the clipboard. Requires shell integration to be set up.`,
+	Short: "Show last n commands from shell history",
+	Long:  `Show the last n commands from your shell history (~/.zsh_history or ~/.bash_history) and copy to clipboard.`,
 	Args:  cobra.MaximumNArgs(1),
 	RunE:  runLast,
 }

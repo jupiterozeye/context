@@ -1,388 +1,112 @@
 # Context
 
-A terminal context capture tool that simplifies sharing your terminal context with AI assistants.
+A simple CLI tool to capture and share terminal context with AI assistants.
 
-No more copy-pasting! Context automatically captures directory structures and command outputs, then copies them to your clipboard for easy sharing with AI tools.
-
-## Features
-
-- **`context dir [path]`** - Generate directory tree and copy to clipboard
-- **`context last [n]`** - Copy last n terminal outputs to clipboard
-- **`context init`** - Show shell integration setup instructions
-- **`context version`** - Show version information
-- Cross-platform clipboard support (Linux, macOS, Windows)
-- Multiple output formats: tree, JSON, markdown
-- Shell integration for Bash, Zsh, and Fish
-- Nix flake support for easy installation
-
-## Why Use Context?
-
-Sharing terminal context with AI assistants usually means:
-1. Running `ls -R` or `tree` and copy-pasting
-2. Scrolling up to find command output and copy-pasting
-3. Repeating this process multiple times
-
-**Context automates this:** Just run `context dir` or `context last 3` and everything is copied to your clipboard, ready to paste into ChatGPT, Claude, or any AI assistant.
-
-## Quick Start
-
-```bash
-# Try it without installing (requires Nix with flakes)
-nix run github:jupiterozeye/context -- dir ~/projects
-
-# Or install from GitHub
-nix profile install github:jupiterozeye/context
-
-# Or install from local repository (for development)
-nix profile install .
-
-# Set up shell integration (required for 'context last')
-context init  # Shows setup instructions
-```
-
-**Note:** `nix profile install github:jupiterozeye/context` installs from the remote GitHub repository. If you've cloned the repo and made local changes, use `nix profile install .` or `nix build && ./result/bin/context` to test your changes.
-
-**Common workflows:**
-```bash
-# Share your project structure with AI
-context dir ~/my-project
-
-# Share the last error message you got
-context last
-
-# Share multiple command outputs for debugging
-context last 5 --format markdown
-```
+Stop copy-pasting directory trees and command history manually - `context` does it for you and copies everything to your clipboard.
 
 ## Installation
 
-### Method 1: Using Nix (Recommended)
-
-**One-off usage (no installation):**
-```bash
-nix run github:jupiterozeye/context -- dir ~/projects
-nix run github:jupiterozeye/context -- last 3
-```
-
-**Install to your profile:**
+**One-liner install (Nix with flakes):**
 ```bash
 nix profile install github:jupiterozeye/context
 ```
 
-### Method 2: From Source (requires Go)
-
+**Other methods:**
 ```bash
-# Clone and build
+# Try without installing
+nix run github:jupiterozeye/context -- dir
+
+# Install from source (requires Go)
 git clone https://github.com/jupiterozeye/context.git
 cd context
 go build -o context ./cmd/context
-
-# Install to ~/.local/bin (recommended)
-mkdir -p ~/.local/bin ~/.local/share/context/shell
-cp context ~/.local/bin/
-cp -r shell/* ~/.local/share/context/shell/
-
-# Make sure ~/.local/bin is in your PATH
-echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
-source ~/.bashrc
+sudo cp context /usr/local/bin/
 ```
 
-### Method 3: Using Make (from source)
-
-```bash
-git clone https://github.com/jupiterozeye/context.git
-cd context
-
-# Install to ~/.local (recommended for NixOS users)
-make build
-mkdir -p ~/.local/bin ~/.local/share/context/shell
-cp context ~/.local/bin/
-cp -r shell/* ~/.local/share/context/shell/
-
-# Or install system-wide (requires sudo, not recommended for NixOS)
-sudo make install
-```
-
-## Advanced Installation
-
-### NixOS Configuration (flakes)
-
-Add to your system's `flake.nix`:
-
-```nix
-{
-  inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-    context.url = "github:jupiterozeye/context";
-  };
-
-  outputs = { self, nixpkgs, context, ... }@inputs: {
-    nixosConfigurations.yourhostname = nixpkgs.lib.nixosSystem {
-      system = "x86_64-linux";
-      specialArgs = { inherit inputs; };
-      modules = [
-        ./configuration.nix
-        ({ pkgs, inputs, ... }: {
-          environment.systemPackages = [ inputs.context.packages.x86_64-linux.default ];
-          
-          # Optional: Auto-source shell integration for all users
-          programs.bash.interactiveShellInit = ''
-            source ${inputs.context.packages.x86_64-linux.default}/share/context/shell/context.bash
-          '';
-          programs.zsh.interactiveShellInit = ''
-            source ${inputs.context.packages.x86_64-linux.default}/share/context/shell/context.zsh
-          '';
-        })
-      ];
-    };
-  };
-}
-```
-
-Or in your `configuration.nix` (if using specialArgs):
-
-```nix
-{ config, pkgs, inputs, ... }:
-
-{
-  environment.systemPackages = [ inputs.context.packages.x86_64-linux.default ];
-}
-```
-
-### Home Manager (flakes)
-
-```nix
-{
-  inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-    home-manager.url = "github:nix-community/home-manager";
-    context.url = "github:jupiterozeye/context";
-  };
-
-  outputs = { nixpkgs, home-manager, context, ... }: {
-    homeConfigurations.username = home-manager.lib.homeManagerConfiguration {
-      pkgs = nixpkgs.legacyPackages.x86_64-linux;
-      modules = [
-        {
-          home.packages = [ context.packages.x86_64-linux.context ];
-          
-          # Shell integration
-          programs.bash.initExtra = ''
-            source ${context.packages.x86_64-linux.context}/share/context/shell/context.bash
-          '';
-          
-          programs.zsh.initExtra = ''
-            source ${context.packages.x86_64-linux.context}/share/context/shell/context.zsh
-          '';
-        }
-      ];
-    };
-  };
-}
-```
-
-
-
-## Setup
-
-### Shell Integration (Required for `context last`)
-
-The shell integration captures command output so `context last` can access it.
-
-**Quick setup:** Run `context init` to see setup instructions for your installation method.
-
-**Manual setup:**
-
-Choose the appropriate path based on how you installed:
-
-| Installation Method | Shell Config Location | Command to Add |
-|---------------------|----------------------|----------------|
-| Nix profile install | `~/.bashrc` / `~/.zshrc` | `source ~/.nix-profile/share/context/shell/context.bash` |
-| From source / Make | `~/.bashrc` / `~/.zshrc` | `source ~/.local/share/context/shell/context.bash` |
-| System-wide (`sudo make install`) | `~/.bashrc` / `~/.zshrc` | `source /usr/local/share/context/shell/context.bash` |
-
-Replace `.bash` with `.zsh` for Zsh or `.fish` for Fish shell, and update the config file location accordingly.
-
-**Apply changes:**
-```bash
-source ~/.bashrc  # or ~/.zshrc, ~/.config/fish/config.fish
-```
+That's it! No setup, no configuration files, no shell integration needed.
 
 ## Usage
 
-### Command: `context dir`
+### `context dir` - Share your project structure
 
-Generate a directory tree and copy it to your clipboard.
-
-**Examples:**
 ```bash
-# Current directory (tree format)
+# Current directory
 context dir
 
 # Specific directory
-context dir ~/projects/myproject
+context dir ~/my-project
 
-# Limit depth and exclude patterns
-context dir ~/projects --depth 2 --exclude "node_modules,.git"
-
-# JSON format (great for AI analysis)
+# Options
+context dir --depth 2 --exclude "node_modules,.git"
 context dir --format json
-
-# Markdown format (great for documentation)
 context dir --format markdown
-
-# Include hidden files
 context dir --hidden
-
-# Just print, don't copy to clipboard
-context dir --no-copy
+context dir --no-copy  # Just print, don't copy to clipboard
 ```
 
-**Options:**
-| Flag | Short | Description | Default |
-|------|-------|-------------|---------|
-| `--depth` | `-d` | Maximum depth (0 = unlimited) | `0` |
-| `--exclude` | `-e` | Comma-separated patterns to exclude | `""` |
-| `--hidden` | `-H` | Include hidden files | `false` |
-| `--format` | `-f` | Output format: `tree`, `json`, or `markdown` | `tree` |
-| `--no-copy` | `-c` | Print only, don't copy to clipboard | `false` |
+**Flags:**
+- `-d, --depth N` - Limit depth (0 = unlimited)
+- `-e, --exclude` - Exclude patterns (comma-separated)
+- `-f, --format` - Output format: `tree` (default), `json`, or `markdown`
+- `-H, --hidden` - Include hidden files
+- `-c, --no-copy` - Print only, don't copy
 
-### Command: `context last`
+### `context last` - Share recent commands
 
-Copy recent command outputs to your clipboard. Requires shell integration setup.
-
-**Examples:**
 ```bash
-# Copy last command output
+# Last command
 context last
 
-# Copy last 3 command outputs
+# Last 5 commands  
+context last 5
+
+# Markdown format
+context last 10 --format markdown
+```
+
+Reads from your shell history (`~/.zsh_history` or `~/.bash_history`).
+
+**Flags:**
+- `-f, --format` - Output format: `raw`, `command` (default), or `markdown`
+- `-r, --raw` - Raw output without formatting
+- `-c, --no-copy` - Print only, don't copy
+
+## Examples
+
+**Share your project with AI:**
+```bash
+cd ~/my-project
+context dir
+# Paste into ChatGPT/Claude: "Here's my project structure: [Ctrl+V]"
+```
+
+**Share what you just tried:**
+```bash
 context last 3
-
-# Markdown format (great for AI)
-context last 5 --format markdown
-
-# Just print, don't copy to clipboard
-context last --no-copy
+# Paste into AI: "I tried these commands: [Ctrl+V]"
 ```
 
-**Options:**
-| Flag | Short | Description | Default |
-|------|-------|-------------|---------|
-| `--format` | `-f` | Output format: `raw`, `command`, or `markdown` | `raw` |
-| `--raw` | `-r` | Raw output without formatting | `false` |
-| `--no-copy` | `-c` | Print only, don't copy to clipboard | `false` |
-
-### Other Commands
-
+**Combine both:**
 ```bash
-# Show shell integration setup instructions
-context init
-
-# Show version
-context version
-
-# Show help
-context --help
-context dir --help
+context dir --format markdown > project.md
+context last 10 --format markdown >> project.md
+# Now project.md has everything for your AI
 ```
 
-## How It Works
+## Why Context?
 
-**`context dir`**: Walks the directory tree and generates output in your chosen format (tree/JSON/markdown), then copies it to your clipboard.
+Before:
+1. Run `ls -R` or `tree`
+2. Select and copy output
+3. Paste into AI chat
+4. Scroll up to find error messages
+5. Select and copy those too
+6. Paste again...
 
-**`context last`**: Shell integration hooks capture command outputs to `~/.local/share/context/history.jsonl`. The `context last` command reads this history and copies recent outputs to your clipboard.
-
-## Troubleshooting
-
-### `context last` says "history file not found"
-
-You need to set up shell integration first:
-
-1. Run `context init` to see setup instructions
-2. Add the appropriate `source` command to your shell config
-3. Restart your terminal or run `source ~/.bashrc` (or `~/.zshrc`)
-4. Run a few commands to build up history
-5. Try `context last` again
-
-### Command not found
-
-**After Nix installation:**
-The command should be available immediately. Try opening a new terminal or run:
-```bash
-hash -r  # Refresh shell's command cache
-which context
-```
-
-**For ~/.local/bin installs:**
-Make sure the installation directory is in your PATH:
-```bash
-echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
-source ~/.bashrc
-which context
-```
-
-### Missing commands (like `context init`)
-
-If you installed from GitHub (`nix profile install github:jupiterozeye/context`) and commands like `init` are missing, it means the GitHub version is older than your local code. 
-
-**Solutions:**
-1. **Push your local changes to GitHub** (if you have commit access):
-   ```bash
-   git push origin main
-   # Wait a moment, then reinstall
-   nix profile remove context
-   nix profile install github:jupiterozeye/context
-   ```
-
-2. **Install from local repository** (for development/testing):
-   ```bash
-   nix profile remove context  # Remove old version
-   nix profile install .       # Install from current directory
-   ```
-
-3. **Use the built binary directly**:
-   ```bash
-   nix build
-   ./result/bin/context init
-   ```
-
-### Clipboard not working
-
-Context uses platform-specific clipboard tools:
-- **Linux X11**: `xclip` or `xsel` (install via your package manager)
-- **Linux Wayland**: `wl-clipboard` (install via your package manager)
-- **macOS**: `pbcopy` (built-in)
-- **Windows**: `clip` (built-in)
-
-**Install clipboard tools:**
-
-```bash
-# NixOS/Nix
-nix-env -iA nixpkgs.wl-clipboard  # For Wayland
-nix-env -iA nixpkgs.xclip         # For X11
-
-# Ubuntu/Debian
-sudo apt install wl-clipboard  # For Wayland
-sudo apt install xclip         # For X11
-
-# Fedora
-sudo dnf install wl-clipboard  # For Wayland
-sudo dnf install xclip         # For X11
-
-# Arch
-sudo pacman -S wl-clipboard    # For Wayland
-sudo pacman -S xclip           # For X11
-```
-
-**Note:** The Nix package includes clipboard utilities, but if you installed from source, you'll need to install them separately.
-
-### NixOS: "cannot run dynamically linked executable"
-
-If you built with `go build`, the binary won't work on NixOS. Use one of these instead:
-- `nix build` to build with Nix
-- `go run ./cmd/context` to run directly
-- `nix profile install` to install via Nix
+After:
+1. `context dir` → Everything in clipboard
+2. `context last 5` → Recent commands in clipboard  
+3. Paste into AI ✨
 
 ## Development
 
@@ -393,22 +117,67 @@ go run ./cmd/context dir
 # Build
 go build -o context ./cmd/context
 
-# Test
-make test
-
 # Build with Nix
 nix build
-
-# Run with Nix (one-off)
-nix run . -- dir ~/projects
-nix run github:jupiterozeye/context -- dir ~/projects
+./result/bin/context dir
 ```
 
-## Files Reference
+## NixOS Integration
 
-- **`flake.nix`** - Nix flake definition for modern Nix (flakes-enabled)
-- **`default.nix`** - Legacy Nix expression for `nix-build` (non-flakes). Use if you don't have flakes enabled: `nix-build -A context`
-- **`shell/`** - Shell integration scripts (bash, zsh, fish)
+Add to your NixOS `flake.nix`:
+
+```nix
+{
+  inputs = {
+    context.url = "github:jupiterozeye/context";
+    # ... other inputs
+  };
+  
+  # Then add to your packages:
+  environment.systemPackages = [
+    inputs.context.packages.${pkgs.system}.default
+  ];
+}
+```
+
+Or via home-manager:
+```nix
+{
+  home.packages = [
+    inputs.context.packages.${pkgs.system}.default
+  ];
+}
+```
+
+## Troubleshooting
+
+**Clipboard not working:**
+
+Install clipboard tools:
+- **Linux/Wayland**: `wl-clipboard`
+- **Linux/X11**: `xclip`
+- **macOS**: Built-in (pbcopy)
+- **Windows**: Built-in (clip)
+
+```bash
+# NixOS
+nix-env -iA nixpkgs.wl-clipboard
+
+# Ubuntu/Debian
+sudo apt install wl-clipboard
+
+# Arch
+sudo pacman -S wl-clipboard
+```
+
+**`context last` shows "no history found":**
+
+Make sure you're using bash or zsh and have a history file:
+```bash
+ls -la ~/.zsh_history ~/.bash_history
+```
+
+If empty, your shell might not be saving history. Check your shell config (`~/.zshrc` or `~/.bashrc`).
 
 ## License
 
