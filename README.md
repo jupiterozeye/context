@@ -25,7 +25,7 @@ nix run github:jupiterozeye/context -- last 3
 
 ### NixOS Configuration (flakes)
 
-Add to your `flake.nix` inputs:
+Add to your system's `flake.nix`:
 
 ```nix
 {
@@ -37,21 +37,33 @@ Add to your `flake.nix` inputs:
   outputs = { self, nixpkgs, context, ... }@inputs: {
     nixosConfigurations.yourhostname = nixpkgs.lib.nixosSystem {
       system = "x86_64-linux";
+      specialArgs = { inherit inputs; };
       modules = [
-        {
-          environment.systemPackages = [ context.packages.x86_64-linux.context ];
+        ./configuration.nix
+        ({ pkgs, inputs, ... }: {
+          environment.systemPackages = [ inputs.context.packages.x86_64-linux.default ];
           
           # Optional: Auto-source shell integration for all users
           programs.bash.interactiveShellInit = ''
-            source ${context.packages.x86_64-linux.context}/share/context/shell/context.bash
+            source ${inputs.context.packages.x86_64-linux.default}/share/context/shell/context.bash
           '';
           programs.zsh.interactiveShellInit = ''
-            source ${context.packages.x86_64-linux.context}/share/context/shell/context.zsh
+            source ${inputs.context.packages.x86_64-linux.default}/share/context/shell/context.zsh
           '';
-        }
+        })
       ];
     };
   };
+}
+```
+
+Or in your `configuration.nix` (if using specialArgs):
+
+```nix
+{ config, pkgs, inputs, ... }:
+
+{
+  environment.systemPackages = [ inputs.context.packages.x86_64-linux.default ];
 }
 ```
 
@@ -93,8 +105,22 @@ Add to your `flake.nix` inputs:
 git clone https://github.com/jupiterozeye/context.git
 cd context
 go build -o context ./cmd/context
+
+# Option 1: Install to /usr/local/bin (traditional Linux)
+sudo mkdir -p /usr/local/bin /usr/local/share/context/shell
 sudo cp context /usr/local/bin/
+sudo cp -r shell/* /usr/local/share/context/shell/
+
+# Option 2: Install to ~/.local/bin (recommended for NixOS and user installs)
+mkdir -p ~/.local/bin ~/.local/share/context/shell
+cp context ~/.local/bin/
+cp -r shell/* ~/.local/share/context/shell/
+
+# Make sure ~/.local/bin is in your PATH
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
 ```
+
+**Note for NixOS users:** NixOS doesn't use `/usr/local`. Use Option 2 (`~/.local/bin`) or prefer the Nix/NixOS installation methods above.
 
 ## Setup
 
@@ -114,7 +140,7 @@ source ~/.nix-profile/share/context/shell/context.zsh
 source ~/.nix-profile/share/context/shell/context.fish
 ```
 
-**For system-wide installs** (`make install` or manual):
+**For system-wide installs** (`make install` or manual to `/usr/local`):
 ```bash
 # Bash (~/.bashrc)
 source /usr/local/share/context/shell/context.bash
@@ -124,6 +150,18 @@ source /usr/local/share/context/shell/context.zsh
 
 # Fish (~/.config/fish/config.fish)
 source /usr/local/share/context/shell/context.fish
+```
+
+**For local installs** (manual to `~/.local`):
+```bash
+# Bash (~/.bashrc)
+source ~/.local/share/context/shell/context.bash
+
+# Zsh (~/.zshrc)
+source ~/.local/share/context/shell/context.zsh
+
+# Fish (~/.config/fish/config.fish)
+source ~/.local/share/context/shell/context.fish
 ```
 
 **For local development** (from repo):
@@ -220,6 +258,12 @@ nix build
 nix run . -- dir ~/projects
 nix run github:jupiterozeye/context -- dir ~/projects
 ```
+
+## Files Reference
+
+- **`flake.nix`** - Nix flake definition for modern Nix (flakes-enabled)
+- **`default.nix`** - Legacy Nix expression for `nix-build` (non-flakes). Use if you don't have flakes enabled: `nix-build -A context`
+- **`shell/`** - Shell integration scripts (bash, zsh, fish)
 
 ## License
 

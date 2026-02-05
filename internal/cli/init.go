@@ -30,7 +30,7 @@ For Nix/NixOS installations (nix profile install):
   Fish (~/.config/fish/config.fish):
     source ~/.nix-profile/share/context/shell/context.fish
 
-For system-wide installations (make install or manual):
+For system-wide installations (make install or manual to /usr/local):
   Bash (~/.bashrc):
     source /usr/local/share/context/shell/context.bash
   
@@ -39,6 +39,16 @@ For system-wide installations (make install or manual):
   
   Fish (~/.config/fish/config.fish):
     source /usr/local/share/context/shell/context.fish
+
+For local installations (manual to ~/.local):
+  Bash (~/.bashrc):
+    source ~/.local/share/context/shell/context.bash
+  
+  Zsh (~/.zshrc):
+    source ~/.local/share/context/shell/context.zsh
+  
+  Fish (~/.config/fish/config.fish):
+    source ~/.local/share/context/shell/context.fish
 
 After setup, restart your terminal or run:
   source ~/.bashrc  # or ~/.zshrc, etc.
