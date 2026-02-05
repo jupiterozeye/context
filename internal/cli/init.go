@@ -6,6 +6,10 @@ import (
 	"github.com/spf13/cobra"
 )
 
+func init() {
+	rootCmd.AddCommand(initCmd)
+}
+
 var initCmd = &cobra.Command{
 	Use:   "init",
 	Short: "Print shell integration setup instructions",

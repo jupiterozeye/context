@@ -19,7 +19,7 @@
             inherit version;
             src = ./.;
             
-            vendorHash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+            vendorHash = "sha256-OxV4XCXVQJiA4VJNlncP5gehfOsfSnqVAIPZWRXd9AM=";
             
             ldflags = [
               "-s"
@@ -27,10 +27,17 @@
               "-X main.version=${version}"
             ];
             
+            buildInputs = with pkgs; [ wl-clipboard ];
+            
             postInstall = ''
               mkdir -p $out/share/context/shell
               cp -r $src/shell/* $out/share/context/shell/
+              
+              wrapProgram $out/bin/context \
+                --prefix PATH : ${pkgs.lib.makeBinPath (with pkgs; [ wl-clipboard xclip ])}
             '';
+            
+            nativeBuildInputs = [ pkgs.makeWrapper ];
             
             meta = with pkgs.lib; {
               description = "Terminal context capture tool for AI-assisted debugging";
