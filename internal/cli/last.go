@@ -5,28 +5,26 @@ import (
 	"strconv"
 
 	"github.com/jupiterozeye/context/internal/clipboard"
-	"github.com/jupiterozeye/context/internal/last"
+	"github.com/jupiterozeye/context/internal/output"
 	"github.com/spf13/cobra"
 )
 
 var (
-	lastRaw    bool
 	lastFormat string
 	lastNoCopy bool
 )
 
 var lastCmd = &cobra.Command{
 	Use:   "last [n]",
-	Short: "Show last n commands from shell history",
-	Long:  `Show the last n commands from your shell history (~/.zsh_history or ~/.bash_history) and copy to clipboard.`,
+	Short: "Show last n commands with their output",
+	Long:  `Show the last n commands with their output from the command logs and copy to clipboard.`,
 	Args:  cobra.MaximumNArgs(1),
 	RunE:  runLast,
 }
 
 func init() {
 	rootCmd.AddCommand(lastCmd)
-	lastCmd.Flags().BoolVarP(&lastRaw, "raw", "r", false, "Raw output without formatting")
-	lastCmd.Flags().StringVarP(&lastFormat, "format", "f", "raw", "Output format: raw|command|markdown")
+	lastCmd.Flags().StringVarP(&lastFormat, "format", "f", "raw", "Output format: raw|markdown|detailed")
 	lastCmd.Flags().BoolVarP(&lastNoCopy, "no-copy", "c", false, "Print only, don't copy to clipboard")
 }
 
@@ -44,20 +42,20 @@ func runLast(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("number must be positive")
 	}
 
-	reader := last.NewReader(last.Options{
+	reader := output.NewReader(output.Options{
 		Format: lastFormat,
-		Raw:    lastRaw,
 	})
 
-	output, err := reader.Read(n)
+	entries, err := reader.Read(n)
 	if err != nil {
-		return fmt.Errorf("failed to read history: %w", err)
+		return fmt.Errorf("failed to read command output logs: %w", err)
 	}
 
-	fmt.Print(output)
+	formatted := reader.FormatEntries(entries)
+	fmt.Print(formatted)
 
 	if !lastNoCopy {
-		if err := clipboard.Copy(output); err != nil {
+		if err := clipboard.Copy(formatted); err != nil {
 			return fmt.Errorf("failed to copy to clipboard: %w", err)
 		}
 		fmt.Println("\nCopied to clipboard!")

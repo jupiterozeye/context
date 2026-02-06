@@ -15,6 +15,9 @@ automatically copying them to your clipboard for easy sharing.
 Usage:
   context dir [path]     - Generate directory tree and copy to clipboard
   context last [n]       - Show last n commands from shell history`,
+	CompletionOptions: cobra.CompletionOptions{
+		DisableDefaultCmd: true,
+	},
 }
 
 func Execute() error {

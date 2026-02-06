@@ -34,6 +34,9 @@
           postInstall = ''
             wrapProgram $out/bin/context \
               --prefix PATH : ${pkgs.lib.makeBinPath (with pkgs; [wl-clipboard xclip])}
+            
+            mkdir -p $out/share/context/shell
+            cp -r $src/shell/* $out/share/context/shell/
           '';
 
           nativeBuildInputs = [pkgs.makeWrapper];
