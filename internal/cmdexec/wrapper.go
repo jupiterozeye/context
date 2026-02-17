@@ -4,6 +4,7 @@ package cmdexec
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"strings"
 
 	"github.com/creack/pty"
