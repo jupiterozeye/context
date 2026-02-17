@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"sort"
 	"strings"
 	"time"
 )
@@ -60,7 +59,7 @@ func (r *Reader) readFromLogFiles(n int) ([]LogEntry, error) {
 	files, err := os.ReadDir(r.logDir)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("no log directory found. Enable shell integration first.")
+			return nil, fmt.Errorf("no log directory found. enable shell integration first")
 		}
 		return nil, fmt.Errorf("failed to read log directory: %w", err)
 	}
@@ -74,13 +73,11 @@ func (r *Reader) readFromLogFiles(n int) ([]LogEntry, error) {
 	}
 
 	if len(logFiles) == 0 {
-		return nil, fmt.Errorf("no log files found. Run some commands first.")
+		return nil, fmt.Errorf("no log files found. run some commands first")
 	}
 
 	// Sort by name descending (newest first based on timestamp in filename)
-	sort.Slice(logFiles, func(i, j int) bool {
-		return logFiles[i].Name() > logFiles[j].Name()
-	})
+	sortFilesByName(logFiles)
 
 	// Read the last n entries
 	var entries []LogEntry
@@ -92,11 +89,25 @@ func (r *Reader) readFromLogFiles(n int) ([]LogEntry, error) {
 	}
 
 	// Reverse so oldest is first (natural reading order)
+	reverseEntries(entries)
+
+	return entries, nil
+}
+
+func sortFilesByName(files []os.DirEntry) {
+	for i := 0; i < len(files); i++ {
+		for j := i + 1; j < len(files); j++ {
+			if files[i].Name() < files[j].Name() {
+				files[i], files[j] = files[j], files[i]
+			}
+		}
+	}
+}
+
+func reverseEntries(entries []LogEntry) {
 	for i, j := 0, len(entries)-1; i < j; i, j = i+1, j-1 {
 		entries[i], entries[j] = entries[j], entries[i]
 	}
-
-	return entries, nil
 }
 
 // parseLogFile parses a single log file into a LogEntry
@@ -149,42 +160,44 @@ func (r *Reader) parseLogFile(path string) (*LogEntry, error) {
 		}
 	}
 
-	// Clean output - remove ANSI codes and bat warnings
+	// Clean output
 	output := strings.Join(outputLines, "\n")
 	output = stripANSI(output)
 	output = strings.TrimSpace(output)
-
-	// Filter out bat warnings
-	if strings.Contains(output, "[bat warning]") {
-		lines := strings.Split(output, "\n")
-		var filtered []string
-		for _, line := range lines {
-			if !strings.Contains(line, "[bat warning]") {
-				filtered = append(filtered, line)
-			}
-		}
-		output = strings.Join(filtered, "\n")
-	}
+	output = filterBatWarnings(output)
 
 	entry.Output = output
 
 	return entry, nil
 }
 
+func filterBatWarnings(output string) string {
+	if !strings.Contains(output, "[bat warning]") {
+		return output
+	}
+	lines := strings.Split(output, "\n")
+	var filtered []string
+	for _, line := range lines {
+		if !strings.Contains(line, "[bat warning]") {
+			filtered = append(filtered, line)
+		}
+	}
+	return strings.Join(filtered, "\n")
+}
+
 // readFromTypescript reads from the script typescript file
 func (r *Reader) readFromTypescript(n int) ([]LogEntry, error) {
-	if _, err := os.Stat(r.typescriptPath); os.IsNotExist(err) {
-		return nil, fmt.Errorf("no typescript file")
-	}
-
 	content, err := os.ReadFile(r.typescriptPath)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, fmt.Errorf("no typescript file found")
+		}
 		return nil, err
 	}
 
 	entries := r.parseTypescript(string(content))
 	if len(entries) == 0 {
-		return nil, fmt.Errorf("no commands in typescript")
+		return nil, fmt.Errorf("no commands found in typescript")
 	}
 
 	// Return last n entries
@@ -203,22 +216,32 @@ func (r *Reader) parseTypescript(content string) []LogEntry {
 
 	lines := strings.Split(content, "\n")
 
-	// Prompt patterns
+	// Common prompt patterns - expanded for better matching
 	promptPatterns := []*regexp.Regexp{
-		regexp.MustCompile(`[~\/][^\s]*\s*❯\s*(.+)$`),
-		regexp.MustCompile(`[~\/][^\s]*\s*>\s+(.+)$`),
-		regexp.MustCompile(`\$\s+(.+)$`),
-		regexp.MustCompile(`%\s+(.+)$`),
+		// Starship-style: ~/path ❯ command
+		regexp.MustCompile(`^[\s]*[~\/][^❯]*❯\s+(.+)$`),
+		// Standard shells: $ command or % command
+		regexp.MustCompile(`^[\s]*\$\s+(.+)$`),
+		regexp.MustCompile(`^[\s]*%\s+(.+)$`),
+		// Arrow style: > command
+		regexp.MustCompile(`^[\s]*>\s+(.+)$`),
+		// Path with #: /path # command
+		regexp.MustCompile(`^[\s]*[\w\/]+[#\$]\s+(.+)$`),
 	}
 
 	var currentEntry *LogEntry
 	var outputLines []string
 
 	for _, line := range lines {
-		line = strings.TrimSpace(line)
+		trimmed := strings.TrimSpace(line)
 
-		// Skip noise
-		if len(line) == 0 || strings.HasPrefix(line, "Script ") {
+		// Skip empty lines and noise
+		if trimmed == "" {
+			continue
+		}
+
+		// Skip script headers
+		if strings.HasPrefix(trimmed, "Script ") || strings.HasPrefix(trimmed, "script ") {
 			continue
 		}
 
@@ -227,7 +250,8 @@ func (r *Reader) parseTypescript(content string) []LogEntry {
 		for _, pattern := range promptPatterns {
 			if matches := pattern.FindStringSubmatch(line); len(matches) > 1 {
 				cmd := strings.TrimSpace(matches[1])
-				if len(cmd) > 1 && !strings.HasPrefix(cmd, "context") {
+				// Skip context commands and very short/empty commands
+				if len(cmd) > 0 && !strings.HasPrefix(cmd, "context ") && cmd != "context" {
 					command = cmd
 					break
 				}
@@ -235,17 +259,24 @@ func (r *Reader) parseTypescript(content string) []LogEntry {
 		}
 
 		if command != "" {
+			// Save previous entry
 			if currentEntry != nil {
 				currentEntry.Output = cleanOutput(strings.Join(outputLines, "\n"))
 				entries = append(entries, *currentEntry)
 			}
+			// Start new entry
 			currentEntry = &LogEntry{Command: command}
 			outputLines = []string{}
-		} else if currentEntry != nil && !strings.HasPrefix(line, "Copied to clipboard") {
+		} else if currentEntry != nil {
+			// Skip our own output messages
+			if strings.Contains(trimmed, "Copied to clipboard") {
+				continue
+			}
 			outputLines = append(outputLines, line)
 		}
 	}
 
+	// Don't forget the last entry
 	if currentEntry != nil {
 		currentEntry.Output = cleanOutput(strings.Join(outputLines, "\n"))
 		entries = append(entries, *currentEntry)
@@ -256,13 +287,15 @@ func (r *Reader) parseTypescript(content string) []LogEntry {
 
 // stripANSI removes ANSI escape codes
 func stripANSI(s string) string {
-	ansiRegex := regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]|\x1b\][^\x07]*\x07|\x1b[PX^_][^\x1b]*\x1b\\|\x1b\[[0-9;]*[mKHJPq]`)
+	// Comprehensive ANSI pattern
+	ansiRegex := regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]|\x1b\][^\x07]*\x07|\x1b[PX^_][^\x1b]*\x1b\\|\x1b\[[0-9;]*[mKHJPqsu]|\x1b[ c\(\)][0-9]*`)
 	return ansiRegex.ReplaceAllString(s, "")
 }
 
 // cleanOutput cleans output text
 func cleanOutput(s string) string {
 	s = strings.TrimSpace(s)
+	// Collapse multiple blank lines
 	for strings.Contains(s, "\n\n\n") {
 		s = strings.ReplaceAll(s, "\n\n\n", "\n\n")
 	}
