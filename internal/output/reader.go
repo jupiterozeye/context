@@ -216,17 +216,17 @@ func (r *Reader) parseTypescript(content string) []LogEntry {
 
 	lines := strings.Split(content, "\n")
 
-	// Common prompt patterns - expanded for better matching
+	// Common prompt patterns - order matters (more specific first)
 	promptPatterns := []*regexp.Regexp{
-		// Starship-style: ~/path ❯ command
+		// Starship-style: ~/path ❯ command (most specific)
 		regexp.MustCompile(`^[\s]*[~\/][^❯]*❯\s+(.+)$`),
-		// Standard shells: $ command or % command
+		// User@host with path: [user@host ~/path]$ command
+		regexp.MustCompile(`^[\s]*\[[^\]]+\][#\$]\s+(.+)$`),
+		// Standard shells: $ command or % command (must have space after)
 		regexp.MustCompile(`^[\s]*\$\s+(.+)$`),
 		regexp.MustCompile(`^[\s]*%\s+(.+)$`),
-		// Arrow style: > command
+		// Arrow style: > command (must have space after)
 		regexp.MustCompile(`^[\s]*>\s+(.+)$`),
-		// Path with #: /path # command
-		regexp.MustCompile(`^[\s]*[\w\/]+[#\$]\s+(.+)$`),
 	}
 
 	var currentEntry *LogEntry
@@ -299,7 +299,39 @@ func cleanOutput(s string) string {
 	for strings.Contains(s, "\n\n\n") {
 		s = strings.ReplaceAll(s, "\n\n\n", "\n\n")
 	}
-	return s
+	// Remove trailing prompt lines (common in typescript)
+	lines := strings.Split(s, "\n")
+	for len(lines) > 0 {
+		lastLine := strings.TrimSpace(lines[len(lines)-1])
+		if lastLine == "" {
+			lines = lines[:len(lines)-1]
+			continue
+		}
+		// Check if last line looks like a prompt
+		if isPromptLine(lastLine) {
+			lines = lines[:len(lines)-1]
+			continue
+		}
+		break
+	}
+	return strings.Join(lines, "\n")
+}
+
+func isPromptLine(line string) bool {
+	// Common prompt endings
+	promptPatterns := []*regexp.Regexp{
+		regexp.MustCompile(`[~\/][^❯]*❯\s*$`),
+		regexp.MustCompile(`\$\s*$`),
+		regexp.MustCompile(`%\s*$`),
+		regexp.MustCompile(`>\s*$`),
+		regexp.MustCompile(`[#\$]\s*$`),
+	}
+	for _, p := range promptPatterns {
+		if p.MatchString(line) {
+			return true
+		}
+	}
+	return false
 }
 
 // FormatEntries formats log entries
