@@ -75,11 +75,12 @@ context last 3 --format detailed
 
 **Flags:**
 - `-f, --format` - Output format: `raw` (default), `markdown`, or `detailed`
-- `-c, `--no-copy` - Print only, don't copy
+- `-c, --no-copy` - Print only, don't copy
 
 ### `context rec` - Record session with full output
 
 Starts a recorded shell session where all commands and their output are captured.
+Each session gets a unique ID and is isolated from other terminals.
 
 ```bash
 # Start recording
@@ -95,6 +96,17 @@ exit
 
 # Now get the captured commands with output
 context last
+```
+
+**Note:** When using `context rec`, `context last` only shows commands from the current terminal session.
+
+### `context flush` - Clear all logs
+
+Removes all log files and typescript recordings.
+
+```bash
+# Clear everything
+context flush
 ```
 
 ### Setup
