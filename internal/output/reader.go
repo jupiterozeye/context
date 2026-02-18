@@ -33,6 +33,7 @@ type Reader struct {
 	logDir         string
 	typescriptPath string
 	sessionID      string
+	isRecording    bool
 }
 
 // NewReader creates a new log reader
@@ -41,12 +42,14 @@ func NewReader(opts Options) *Reader {
 	
 	// Check if we're in a recorded session
 	sessionID := os.Getenv("CONTEXT_SESSION_ID")
+	isRecording := os.Getenv("CONTEXT_RECORDING") == "1"
 	
 	var logDir, typescriptPath string
 	if sessionID != "" {
 		// Use session-specific directory
 		logDir = filepath.Join(homeDir, ".context", "logs", sessionID)
 		typescriptPath = filepath.Join(logDir, "typescript")
+		isRecording = true
 	} else {
 		// Use main logs directory
 		logDir = filepath.Join(homeDir, ".context", "logs")
@@ -58,12 +61,23 @@ func NewReader(opts Options) *Reader {
 		logDir:         logDir,
 		typescriptPath: typescriptPath,
 		sessionID:      sessionID,
+		isRecording:    isRecording,
 	}
+}
+
+// IsRecording returns true if in a recorded session
+func (r *Reader) IsRecording() bool {
+	return r.isRecording
 }
 
 // Read retrieves the last n log entries
 func (r *Reader) Read(n int) ([]LogEntry, error) {
-	// Use typescript if it exists and has content (for recorded sessions)
+	// Must be in a recording session
+	if !r.isRecording {
+		return nil, fmt.Errorf("not in a recorded session. run 'context rec' first to start recording")
+	}
+
+	// Use typescript if it exists
 	if _, err := os.Stat(r.typescriptPath); err == nil {
 		entries, err := r.readFromTypescript(n)
 		if err == nil && len(entries) > 0 {
@@ -80,7 +94,7 @@ func (r *Reader) readFromLogFiles(n int) ([]LogEntry, error) {
 	files, err := os.ReadDir(r.logDir)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("no log directory found. enable shell integration first")
+			return nil, fmt.Errorf("no log directory found")
 		}
 		return nil, fmt.Errorf("failed to read log directory: %w", err)
 	}
@@ -94,7 +108,7 @@ func (r *Reader) readFromLogFiles(n int) ([]LogEntry, error) {
 	}
 
 	if len(logFiles) == 0 {
-		return nil, fmt.Errorf("no log files found. run some commands first")
+		return nil, fmt.Errorf("no commands recorded yet. run some commands first")
 	}
 
 	// Sort by mod time descending
@@ -223,14 +237,15 @@ func (r *Reader) readFromTypescript(n int) ([]LogEntry, error) {
 func (r *Reader) parseTypescript(content string) []LogEntry {
 	var entries []LogEntry
 
-	// Extract commands from OSC 2 (window title) sequences FIRST
-	commands := extractCommandsFromOSC(content)
+	// First, strip all escapes
+	cleanContent := stripAllEscapes(content)
+
+	// Extract commands from prompt lines (format: ~ ❯ command or ~ > command)
+	// Looking for patterns like "~ ❯ =context dir ...>" or "~ > command"
+	commands := extractCommandsFromPrompts(cleanContent)
 	if len(commands) == 0 {
 		return entries
 	}
-
-	// Now strip escapes from content for output extraction
-	cleanContent := stripAllEscapes(content)
 
 	// Split clean content by command to extract output
 	for i, cmd := range commands {
@@ -253,44 +268,56 @@ func (r *Reader) parseTypescript(content string) []LogEntry {
 	return entries
 }
 
-// extractCommandsFromOSC extracts commands from OSC window title sequences
-func extractCommandsFromOSC(content string) []string {
+// extractCommandsFromPrompts extracts commands from shell prompt lines
+func extractCommandsFromPrompts(content string) []string {
 	var commands []string
 	seen := make(map[string]bool)
 
-	// Match OSC 2 or 0 sequences: ESC ] 0/2 ; title BEL
-	oscPattern := regexp.MustCompile("\x1b][02];([^\x07\x1b]+)(?:\x07|\x1b\\\\)")
+	lines := strings.Split(content, "\n")
 
-	matches := oscPattern.FindAllStringSubmatch(content, -1)
-	for _, m := range matches {
-		if len(m) > 1 {
-			cmd := strings.TrimSpace(m[1])
-			// Skip duplicates
-			if seen[cmd] {
-				continue
+	// Pattern: prompt ending with command, possibly with `=` prefix and `>` suffix
+	// Examples: "~ ❯ =context dir ...>" or "> ls" or "% cd .."
+	promptPatterns := []*regexp.Regexp{
+		// Starship-style: path ❯ command
+		regexp.MustCompile(`[\s]*[~\/]?[^❯]*❯[\s]*=?([^>]+)>?\s*$`),
+		// Simple > or % prompt
+		regexp.MustCompile(`^[\s]*[%>]\s*=?([^>]+)>?\s*$`),
+		// $ prompt
+		regexp.MustCompile(`^[\s]*\$\s*=?([^>]+)>?\s*$`),
+	}
+
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+
+		// Skip empty lines and noise
+		if line == "" || strings.HasPrefix(line, "Script ") {
+			continue
+		}
+
+		// Try each pattern
+		for _, pattern := range promptPatterns {
+			if matches := pattern.FindStringSubmatch(line); len(matches) > 1 {
+				cmd := strings.TrimSpace(matches[1])
+				// Clean up any remaining markers
+				cmd = strings.TrimPrefix(cmd, "=")
+				cmd = strings.TrimSuffix(cmd, ">")
+				cmd = strings.TrimSpace(cmd)
+
+				// Filter
+				if cmd == "" || cmd == "~" || cmd == "/" {
+					continue
+				}
+				if seen[cmd] {
+					continue
+				}
+				seen[cmd] = true
+				commands = append(commands, cmd)
+				break
 			}
-			// Filter out prompt-only titles
-			if isPromptOnly(cmd) {
-				continue
-			}
-			seen[cmd] = true
-			commands = append(commands, cmd)
 		}
 	}
 
 	return commands
-}
-
-// isPromptOnly checks if a title is just a path/prompt without a command
-func isPromptOnly(title string) bool {
-	if title == "" || title == "~" || title == "/" {
-		return true
-	}
-	// Just a path
-	if regexp.MustCompile(`^[~/][^ ]*$`).MatchString(title) {
-		return true
-	}
-	return false
 }
 
 // extractOutputForCommand extracts output between command and next command

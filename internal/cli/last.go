@@ -46,9 +46,14 @@ func runLast(cmd *cobra.Command, args []string) error {
 		Format: lastFormat,
 	})
 
+	// Check if in recording session
+	if !reader.IsRecording() {
+		return fmt.Errorf("not in a recorded session. run 'context rec' first to start recording")
+	}
+
 	entries, err := reader.Read(n)
 	if err != nil {
-		return fmt.Errorf("failed to read command output logs: %w", err)
+		return err
 	}
 
 	formatted := reader.FormatEntries(entries)
