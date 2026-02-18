@@ -5,8 +5,8 @@ set -gx CONTEXT_LOG_DIR "$HOME/.context/logs"
 set -gx CONTEXT_LOG_ENABLED (test -n "$CONTEXT_LOG_ENABLED"; and echo "$CONTEXT_LOG_ENABLED"; or echo 1)
 set -gx CONTEXT_MAX_SIZE_MB (test -n "$CONTEXT_MAX_SIZE_MB"; and echo "$CONTEXT_MAX_SIZE_MB"; or echo 50)
 
-# Skip if disabled
-if test "$CONTEXT_LOG_ENABLED" != "1"
+# Skip if disabled or in recorded session
+if test "$CONTEXT_LOG_ENABLED" != "1"; or test -n "$CONTEXT_RECORDING"
     exit 0
 end
 

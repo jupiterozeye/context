@@ -5,8 +5,9 @@ export CONTEXT_LOG_DIR="${HOME}/.context/logs"
 export CONTEXT_LOG_ENABLED=${CONTEXT_LOG_ENABLED:-1}
 export CONTEXT_MAX_SIZE_MB=${CONTEXT_MAX_SIZE_MB:-50}
 
-# Skip if disabled
+# Skip if disabled or in a recorded session
 [[ ${CONTEXT_LOG_ENABLED} -ne 1 ]] && return 0
+[[ -n "$CONTEXT_RECORDING" ]] && return 0
 
 # Create directories
 mkdir -p "$CONTEXT_LOG_DIR"
