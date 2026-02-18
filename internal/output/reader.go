@@ -30,9 +30,7 @@ type Options struct {
 // Reader handles reading and parsing log files
 type Reader struct {
 	opts           Options
-	logDir         string
-	typescriptPath string
-	sessionID      string
+	sessionDir     string
 	isRecording    bool
 }
 
@@ -44,23 +42,19 @@ func NewReader(opts Options) *Reader {
 	sessionID := os.Getenv("CONTEXT_SESSION_ID")
 	isRecording := os.Getenv("CONTEXT_RECORDING") == "1"
 	
-	var logDir, typescriptPath string
+	var sessionDir string
 	if sessionID != "" {
 		// Use session-specific directory
-		logDir = filepath.Join(homeDir, ".context", "logs", sessionID)
-		typescriptPath = filepath.Join(logDir, "typescript")
+		sessionDir = filepath.Join(homeDir, ".context", "logs", sessionID)
 		isRecording = true
 	} else {
-		// Use main logs directory
-		logDir = filepath.Join(homeDir, ".context", "logs")
-		typescriptPath = filepath.Join(homeDir, ".context", "typescript")
+		// Fall back to main logs directory (for backwards compatibility)
+		sessionDir = filepath.Join(homeDir, ".context", "logs")
 	}
 	
 	return &Reader{
 		opts:           opts,
-		logDir:         logDir,
-		typescriptPath: typescriptPath,
-		sessionID:      sessionID,
+		sessionDir:     sessionDir,
 		isRecording:    isRecording,
 	}
 }
@@ -77,24 +71,16 @@ func (r *Reader) Read(n int) ([]LogEntry, error) {
 		return nil, fmt.Errorf("not in a recorded session. run 'context rec' first to start recording")
 	}
 
-	// Use typescript if it exists
-	if _, err := os.Stat(r.typescriptPath); err == nil {
-		entries, err := r.readFromTypescript(n)
-		if err == nil && len(entries) > 0 {
-			return entries, nil
-		}
-	}
-
-	// Fall back to log files
+	// Read from session log files
 	return r.readFromLogFiles(n)
 }
 
 // readFromLogFiles reads from individual log files
 func (r *Reader) readFromLogFiles(n int) ([]LogEntry, error) {
-	files, err := os.ReadDir(r.logDir)
+	files, err := os.ReadDir(r.sessionDir)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("no log directory found")
+			return nil, fmt.Errorf("no commands recorded yet. run some commands first")
 		}
 		return nil, fmt.Errorf("failed to read log directory: %w", err)
 	}
@@ -121,7 +107,7 @@ func (r *Reader) readFromLogFiles(n int) ([]LogEntry, error) {
 	// Read the last n entries
 	var entries []LogEntry
 	for i := 0; i < n && i < len(logFiles); i++ {
-		entry, err := r.parseLogFile(filepath.Join(r.logDir, logFiles[i].Name()))
+		entry, err := r.parseLogFile(filepath.Join(r.sessionDir, logFiles[i].Name()))
 		if err == nil && entry != nil {
 			entries = append(entries, *entry)
 		}
@@ -193,6 +179,14 @@ func (r *Reader) parseLogFile(path string) (*LogEntry, error) {
 	output := strings.Join(outputLines, "\n")
 	output = stripANSI(output)
 	output = strings.TrimSpace(output)
+	
+	// Remove the "$ command" line from output if present
+	lines := strings.Split(output, "\n")
+	if len(lines) > 0 && strings.HasPrefix(lines[0], "$ ") {
+		lines = lines[1:]
+	}
+	output = strings.Join(lines, "\n")
+	
 	output = filterBatWarnings(output)
 
 	entry.Output = output
@@ -214,241 +208,10 @@ func filterBatWarnings(output string) string {
 	return strings.Join(filtered, "\n")
 }
 
-// readFromTypescript reads from the script typescript file
-func (r *Reader) readFromTypescript(n int) ([]LogEntry, error) {
-	content, err := os.ReadFile(r.typescriptPath)
-	if err != nil {
-		return nil, err
-	}
-
-	entries := r.parseTypescript(string(content))
-	if len(entries) == 0 {
-		return nil, fmt.Errorf("no commands recorded yet. run some commands first")
-	}
-
-	// Return last n entries
-	if n > len(entries) {
-		n = len(entries)
-	}
-	return entries[len(entries)-n:], nil
-}
-
-// parseTypescript parses the script typescript format
-func (r *Reader) parseTypescript(content string) []LogEntry {
-	var entries []LogEntry
-
-	// Extract commands and their positions from OSC sequences
-	commands := extractCommandsFromOSC(content)
-	if len(commands) == 0 {
-		return entries
-	}
-
-	// Build entries from commands
-	for i, cmdInfo := range commands {
-		cmd := cmdInfo.command
-		if cmd == "" || cmd == "exit" || strings.HasPrefix(cmd, "exit ") {
-			continue
-		}
-		// Skip context last to avoid recursion
-		if cmd == "context last" || strings.HasPrefix(cmd, "context last ") {
-			continue
-		}
-
-		// Extract output between this command and the next
-		var nextPos int
-		if i+1 < len(commands) {
-			nextPos = commands[i+1].position
-		} else {
-			nextPos = len(content)
-		}
-
-		// Extract output from original content between positions
-		section := content[cmdInfo.position:nextPos]
-		output := extractCleanOutput(section)
-
-		entries = append(entries, LogEntry{
-			Command: cmd,
-			Output:  output,
-		})
-	}
-
-	return entries
-}
-
-// commandInfo holds a command and its position in the original content
-type commandInfo struct {
-	command  string
-	position int
-}
-
-// extractCommandsFromOSC extracts commands from OSC window title sequences
-func extractCommandsFromOSC(content string) []commandInfo {
-	var commands []commandInfo
-	seen := make(map[string]bool)
-
-	// Match OSC 2 or 0 sequences: ESC ] 0/2 ; title BEL or ESC \ 
-	oscPattern := regexp.MustCompile("\x1b][02];([^\x07\x1b]+)")
-
-	// Find all matches with their positions
-	matches := oscPattern.FindAllStringSubmatchIndex(content, -1)
-	for _, m := range matches {
-		if len(m) >= 4 {
-			// m[0], m[1] = full match start/end
-			// m[2], m[3] = group 1 (command) start/end
-			cmd := strings.TrimSpace(content[m[2]:m[3]])
-			
-			// Filter out prompt-only titles
-			// Filter out prompt-only and unwanted commands
-			if isPromptOnly(cmd) {
-				continue
-			}
-			if cmd == "context last" || strings.HasPrefix(cmd, "context last ") {
-				continue
-			}
-			// Skip duplicates
-			if seen[cmd] {
-				continue
-			}
-			seen[cmd] = true
-			commands = append(commands, commandInfo{
-				command:  cmd,
-				position: m[1], // End of full match (after BEL or ST)
-			})
-		}
-	}
-
-	return commands
-}
-
-// isPromptOnly checks if a title is just a path/prompt without a command
-func isPromptOnly(title string) bool {
-	if title == "" || title == "~" || title == "/" {
-		return true
-	}
-	// Just a path
-	if regexp.MustCompile(`^[~/][^ ]*$`).MatchString(title) {
-		return true
-	}
-	return false
-}
-
-// extractCleanOutput extracts clean output from a section of typescript
-func extractCleanOutput(section string) string {
-	// Strip all escapes
-	clean := stripAllEscapes(section)
-
-	// Split into lines
-	lines := strings.Split(clean, "\n")
-
-	// Find where actual output starts (skip prompt lines)
-	var startIdx int
-	for i, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" {
-			continue
-		}
-		// Skip prompt-like lines at the start
-		if isPromptLine(trimmed) {
-			startIdx = i + 1
-			continue
-		}
-		// Found first non-prompt line
-		break
-	}
-	lines = lines[startIdx:]
-
-	// Remove trailing prompt/empty lines
-	for len(lines) > 0 {
-		last := strings.TrimSpace(lines[len(lines)-1])
-		if last == "" || isPromptLine(last) || isNoiseLine(last) {
-			lines = lines[:len(lines)-1]
-		} else {
-			break
-		}
-	}
-
-	// Join remaining lines
-	result := strings.Join(lines, "\n")
-
-	// Collapse multiple blank lines
-	for strings.Contains(result, "\n\n\n") {
-		result = strings.ReplaceAll(result, "\n\n\n", "\n\n")
-	}
-
-	return strings.TrimSpace(result)
-}
-
-// stripAllEscapes removes terminal escape sequences
-func stripAllEscapes(content string) string {
-	// OSC sequences
-	content = regexp.MustCompile("\x1b][0-9;:A-Za-z]*[^\x07\x1b]*(?:\x07|\x1b\\\\)?").ReplaceAllString(content, "")
-
-	// CSI sequences
-	content = regexp.MustCompile("\x1b\\[[0-9;:!?<>]*[a-zA-Z@]").ReplaceAllString(content, "")
-
-	// Other escape sequences
-	content = regexp.MustCompile("\x1b[()][0-9A-Za-z~]").ReplaceAllString(content, "")
-	content = regexp.MustCompile("\x1b[#%*+\\-\\\\.\\/:]").ReplaceAllString(content, "")
-	content = regexp.MustCompile("\x1b[NOc\\|\\}^G_@=]").ReplaceAllString(content, "")
-
-	// Remove orphaned ESC
-	content = strings.ReplaceAll(content, "\x1b", "")
-
-	// Remove backspaces
-	var result []rune
-	for _, r := range content {
-		if r != '\b' && r != 0x7f {
-			result = append(result, r)
-		}
-	}
-
-	// Normalize line endings
-	content = strings.ReplaceAll(string(result), "\r\n", "\n")
-	content = strings.ReplaceAll(content, "\r", "\n")
-
-	return content
-}
-
-// isPromptLine checks if line is a shell prompt
-func isPromptLine(line string) bool {
-	if line == "" {
-		return false
-	}
-	patterns := []*regexp.Regexp{
-		regexp.MustCompile(`[~\/][^❯]*❯\s*$`),
-		regexp.MustCompile(`\[[^\]]+\][#\$]\s*$`),
-		regexp.MustCompile(`^\$\s*$`),
-		regexp.MustCompile(`^%\s*$`),
-	}
-	for _, p := range patterns {
-		if p.MatchString(line) {
-			return true
-		}
-	}
-	return false
-}
-
-// isNoiseLine checks for noise lines
-func isNoiseLine(line string) bool {
-	noise := []string{
-		"Script done",
-		"Script started",
-		"Copied to clipboard",
-		"Starting recorded",
-		"Commands and output",
-		"Type 'exit'",
-	}
-	for _, n := range noise {
-		if strings.Contains(line, n) {
-			return true
-		}
-	}
-	return false
-}
-
-// stripANSI removes basic ANSI codes
+// stripANSI removes ANSI escape codes
 func stripANSI(s string) string {
-	return regexp.MustCompile("\x1b\\[[0-9;]*[a-zA-Z]").ReplaceAllString(s, "")
+	ansiRegex := regexp.MustCompile("\x1b\\[[0-9;]*[a-zA-Z]")
+	return ansiRegex.ReplaceAllString(s, "")
 }
 
 // FormatEntries formats log entries
