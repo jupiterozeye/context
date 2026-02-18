@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 )
@@ -45,13 +46,45 @@ func NewReader(opts Options) *Reader {
 
 // Read retrieves the last n log entries
 func (r *Reader) Read(n int) ([]LogEntry, error) {
-	// First, try to read from log files (preferred, has structured output)
-	if entries, err := r.readFromLogFiles(n); err == nil && len(entries) > 0 {
-		return entries, nil
+	// Check which source is more recent
+	tsTime := r.getModTime(r.typescriptPath)
+	logTime := r.getLatestLogTime()
+
+	// Use typescript if it exists and is newer than logs
+	if !tsTime.IsZero() && (logTime.IsZero() || tsTime.After(logTime)) {
+		if entries, err := r.readFromTypescript(n); err == nil && len(entries) > 0 {
+			return entries, nil
+		}
 	}
 
-	// Fall back to typescript file
-	return r.readFromTypescript(n)
+	// Fall back to log files
+	return r.readFromLogFiles(n)
+}
+
+func (r *Reader) getModTime(path string) time.Time {
+	info, err := os.Stat(path)
+	if err != nil {
+		return time.Time{}
+	}
+	return info.ModTime()
+}
+
+func (r *Reader) getLatestLogTime() time.Time {
+	files, err := os.ReadDir(r.logDir)
+	if err != nil {
+		return time.Time{}
+	}
+
+	var latest time.Time
+	for _, f := range files {
+		if strings.HasSuffix(f.Name(), ".log") {
+			info, err := f.Info()
+			if err == nil && info.ModTime().After(latest) {
+				latest = info.ModTime()
+			}
+		}
+	}
+	return latest
 }
 
 // readFromLogFiles reads from individual log files
@@ -64,7 +97,7 @@ func (r *Reader) readFromLogFiles(n int) ([]LogEntry, error) {
 		return nil, fmt.Errorf("failed to read log directory: %w", err)
 	}
 
-	// Filter and sort log files by name (which includes timestamp)
+	// Filter and sort log files by modification time (newest first)
 	var logFiles []os.DirEntry
 	for _, file := range files {
 		if strings.HasSuffix(file.Name(), ".log") {
@@ -76,8 +109,12 @@ func (r *Reader) readFromLogFiles(n int) ([]LogEntry, error) {
 		return nil, fmt.Errorf("no log files found. run some commands first")
 	}
 
-	// Sort by name descending (newest first based on timestamp in filename)
-	sortFilesByName(logFiles)
+	// Sort by mod time descending
+	sort.Slice(logFiles, func(i, j int) bool {
+		fi, _ := logFiles[i].Info()
+		fj, _ := logFiles[j].Info()
+		return fi.ModTime().After(fj.ModTime())
+	})
 
 	// Read the last n entries
 	var entries []LogEntry
@@ -88,20 +125,10 @@ func (r *Reader) readFromLogFiles(n int) ([]LogEntry, error) {
 		}
 	}
 
-	// Reverse so oldest is first (natural reading order)
+	// Reverse so oldest is first
 	reverseEntries(entries)
 
 	return entries, nil
-}
-
-func sortFilesByName(files []os.DirEntry) {
-	for i := 0; i < len(files); i++ {
-		for j := i + 1; j < len(files); j++ {
-			if files[i].Name() < files[j].Name() {
-				files[i], files[j] = files[j], files[i]
-			}
-		}
-	}
 }
 
 func reverseEntries(entries []LogEntry) {
@@ -189,9 +216,6 @@ func filterBatWarnings(output string) string {
 func (r *Reader) readFromTypescript(n int) ([]LogEntry, error) {
 	content, err := os.ReadFile(r.typescriptPath)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("no typescript file found")
-		}
 		return nil, err
 	}
 
@@ -216,7 +240,7 @@ func (r *Reader) parseTypescript(content string) []LogEntry {
 
 	lines := strings.Split(content, "\n")
 
-	// Common prompt patterns - order matters (more specific first)
+	// Common prompt patterns
 	promptPatterns := []*regexp.Regexp{
 		// Starship-style: ~/path ❯ command (most specific)
 		regexp.MustCompile(`^[\s]*[~\/][^❯]*❯\s+(.+)$`),
@@ -240,8 +264,14 @@ func (r *Reader) parseTypescript(content string) []LogEntry {
 			continue
 		}
 
-		// Skip script headers
-		if strings.HasPrefix(trimmed, "Script ") || strings.HasPrefix(trimmed, "script ") {
+		// Skip script headers, context messages, and exit commands
+		if strings.HasPrefix(trimmed, "Script ") ||
+			strings.HasPrefix(trimmed, "🎥 Starting recorded") ||
+			strings.HasPrefix(trimmed, "Commands and output") ||
+			strings.HasPrefix(trimmed, "Type 'exit'") ||
+			trimmed == "exit" ||
+			strings.HasPrefix(trimmed, "exit ") ||
+			strings.Contains(trimmed, "Copied to clipboard!") {
 			continue
 		}
 
@@ -251,7 +281,7 @@ func (r *Reader) parseTypescript(content string) []LogEntry {
 			if matches := pattern.FindStringSubmatch(line); len(matches) > 1 {
 				cmd := strings.TrimSpace(matches[1])
 				// Skip context commands and very short/empty commands
-				if len(cmd) > 0 && !strings.HasPrefix(cmd, "context ") && cmd != "context" {
+				if len(cmd) > 0 && !strings.HasPrefix(cmd, "context ") && cmd != "context" && cmd != "exit" {
 					command = cmd
 					break
 				}
@@ -259,6 +289,11 @@ func (r *Reader) parseTypescript(content string) []LogEntry {
 		}
 
 		if command != "" {
+			// Skip "exit" commands (user ending recording session)
+			if command == "exit" || strings.HasPrefix(command, "exit ") {
+				continue
+			}
+			
 			// Save previous entry
 			if currentEntry != nil {
 				currentEntry.Output = cleanOutput(strings.Join(outputLines, "\n"))
@@ -268,16 +303,17 @@ func (r *Reader) parseTypescript(content string) []LogEntry {
 			currentEntry = &LogEntry{Command: command}
 			outputLines = []string{}
 		} else if currentEntry != nil {
-			// Skip our own output messages
-			if strings.Contains(trimmed, "Copied to clipboard") {
+			// Skip exit and script done lines
+			if trimmed == "exit" || strings.HasPrefix(trimmed, "exit ") ||
+				strings.HasPrefix(trimmed, "Script done") {
 				continue
 			}
 			outputLines = append(outputLines, line)
 		}
 	}
 
-	// Don't forget the last entry
-	if currentEntry != nil {
+	// Don't forget the last entry (skip if it's just "exit")
+	if currentEntry != nil && currentEntry.Command != "exit" && !strings.HasPrefix(currentEntry.Command, "exit ") {
 		currentEntry.Output = cleanOutput(strings.Join(outputLines, "\n"))
 		entries = append(entries, *currentEntry)
 	}
@@ -287,7 +323,6 @@ func (r *Reader) parseTypescript(content string) []LogEntry {
 
 // stripANSI removes ANSI escape codes
 func stripANSI(s string) string {
-	// Comprehensive ANSI pattern
 	ansiRegex := regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]|\x1b\][^\x07]*\x07|\x1b[PX^_][^\x1b]*\x1b\\|\x1b\[[0-9;]*[mKHJPqsu]|\x1b[ c\(\)][0-9]*`)
 	return ansiRegex.ReplaceAllString(s, "")
 }
@@ -299,7 +334,7 @@ func cleanOutput(s string) string {
 	for strings.Contains(s, "\n\n\n") {
 		s = strings.ReplaceAll(s, "\n\n\n", "\n\n")
 	}
-	// Remove trailing prompt lines (common in typescript)
+	// Remove trailing prompt lines
 	lines := strings.Split(s, "\n")
 	for len(lines) > 0 {
 		lastLine := strings.TrimSpace(lines[len(lines)-1])
@@ -307,7 +342,6 @@ func cleanOutput(s string) string {
 			lines = lines[:len(lines)-1]
 			continue
 		}
-		// Check if last line looks like a prompt
 		if isPromptLine(lastLine) {
 			lines = lines[:len(lines)-1]
 			continue
@@ -318,13 +352,13 @@ func cleanOutput(s string) string {
 }
 
 func isPromptLine(line string) bool {
-	// Common prompt endings
+	// Match prompts even with commands after them (for trailing prompt removal)
 	promptPatterns := []*regexp.Regexp{
-		regexp.MustCompile(`[~\/][^❯]*❯\s*$`),
-		regexp.MustCompile(`\$\s*$`),
-		regexp.MustCompile(`%\s*$`),
-		regexp.MustCompile(`>\s*$`),
-		regexp.MustCompile(`[#\$]\s*$`),
+		regexp.MustCompile(`[~\/][^❯]*❯`),
+		regexp.MustCompile(`\$\s+`),
+		regexp.MustCompile(`%\s+`),
+		regexp.MustCompile(`>\s+`),
+		regexp.MustCompile(`\[[^\]]+\][#\$]\s+`),
 	}
 	for _, p := range promptPatterns {
 		if p.MatchString(line) {

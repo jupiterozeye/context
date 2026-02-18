@@ -1,5 +1,5 @@
 # Context Shell Integration for Zsh
-# Captures command output using preexec/precmd hooks
+# Logs commands for context last (use 'context rec' for full output capture)
 
 export CONTEXT_LOG_DIR="${HOME}/.context/logs"
 export CONTEXT_LOG_ENABLED=${CONTEXT_LOG_ENABLED:-1}
@@ -22,22 +22,11 @@ _context_preexec() {
     CONTEXT_CURRENT_CMD="$cmd"
     CONTEXT_CMD_START_TIME=$(date +%s)
     CONTEXT_CMD_TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-    CONTEXT_OUTPUT_FILE=$(mktemp)
-    
-    # Redirect output to temp file and terminal
-    exec 3>&1 4>&2
-    exec 1> >(tee "$CONTEXT_OUTPUT_FILE")
-    exec 2> >(tee -a "$CONTEXT_OUTPUT_FILE" >&2)
 }
 
 # Precmd: runs before each prompt (after command completes)
 _context_precmd() {
     local exit_code=$?
-    
-    # Restore stdout/stderr if we were capturing
-    if [[ -n "$CONTEXT_OUTPUT_FILE" && -f "$CONTEXT_OUTPUT_FILE" ]]; then
-        exec 1>&3 2>&4
-    fi
     
     # Skip if no command was captured
     [[ -z "$CONTEXT_CURRENT_CMD" ]] && return
@@ -48,7 +37,7 @@ _context_precmd() {
     local sanitized_cmd=$(echo "$CONTEXT_CURRENT_CMD" | tr -cd '[:alnum:]._-' | cut -c1-50)
     local log_file="${CONTEXT_LOG_DIR}/${CONTEXT_CMD_TIMESTAMP}_${sanitized_cmd}.log"
     
-    # Write log entry
+    # Write log entry (metadata only - no output capture)
     {
         echo "=== COMMAND: ${CONTEXT_CURRENT_CMD}"
         echo "=== START_TIME: $(date -r $CONTEXT_CMD_START_TIME '+%Y-%m-%d %H:%M:%S' 2>/dev/null || date '+%Y-%m-%d %H:%M:%S')"
@@ -56,17 +45,13 @@ _context_precmd() {
         echo "=== DURATION: ${duration}s"
         echo "=== EXIT_CODE: ${exit_code}"
         echo "=== WORKING_DIR: $(pwd)"
-        if [[ -f "$CONTEXT_OUTPUT_FILE" && -s "$CONTEXT_OUTPUT_FILE" ]]; then
-            echo "=== OUTPUT:"
-            cat "$CONTEXT_OUTPUT_FILE"
-        fi
+        echo "=== OUTPUT:"
+        echo "[Use 'context rec' to capture command output]"
     } > "$log_file"
     
-    # Cleanup
-    rm -f "$CONTEXT_OUTPUT_FILE"
+    # Reset
     CONTEXT_CURRENT_CMD=""
     CONTEXT_CMD_TIMESTAMP=""
-    CONTEXT_OUTPUT_FILE=""
     
     # Clean old logs occasionally (1% chance)
     if [[ $((RANDOM % 100)) -eq 0 ]]; then
@@ -82,7 +67,6 @@ _context_clean_logs() {
     # Check total size
     local total_size=$(du -sm "$CONTEXT_LOG_DIR" 2>/dev/null | cut -f1)
     if [[ $total_size -gt $CONTEXT_MAX_SIZE_MB ]]; then
-        # Delete oldest files until under limit
         while [[ $total_size -gt $CONTEXT_MAX_SIZE_MB ]]; do
             local oldest=$(find "$CONTEXT_LOG_DIR" -type f -name "*.log" -printf '%T+ %p\n' 2>/dev/null | sort | head -1 | cut -d' ' -f2)
             [[ -z "$oldest" ]] && break
