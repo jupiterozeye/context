@@ -233,25 +233,14 @@ func (r *Reader) readFromTypescript(n int) ([]LogEntry, error) {
 
 // parseTypescript parses the script typescript format
 func (r *Reader) parseTypescript(content string) []LogEntry {
+	// First, completely strip all escape sequences
+	content = stripAllEscapes(content)
+
 	var entries []LogEntry
-
-	// Clean ANSI codes
-	content = stripANSI(content)
-
 	lines := strings.Split(content, "\n")
 
-	// Common prompt patterns
-	promptPatterns := []*regexp.Regexp{
-		// Starship-style: ~/path ❯ command (most specific)
-		regexp.MustCompile(`^[\s]*[~\/][^❯]*❯\s+(.+)$`),
-		// User@host with path: [user@host ~/path]$ command
-		regexp.MustCompile(`^[\s]*\[[^\]]+\][#\$]\s+(.+)$`),
-		// Standard shells: $ command or % command (must have space after)
-		regexp.MustCompile(`^[\s]*\$\s+(.+)$`),
-		regexp.MustCompile(`^[\s]*%\s+(.+)$`),
-		// Arrow style: > command (must have space after)
-		regexp.MustCompile(`^[\s]*>\s+(.+)$`),
-	}
+	// Find commands from window titles (]2;) which are now clean
+	titlePattern := regexp.MustCompile(`\]2;(.+)$`)
 
 	var currentEntry *LogEntry
 	var outputLines []string
@@ -259,61 +248,59 @@ func (r *Reader) parseTypescript(content string) []LogEntry {
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
 
-		// Skip empty lines and noise
+		// Skip empty lines
 		if trimmed == "" {
 			continue
 		}
 
-		// Skip script headers, context messages, and exit commands
-		if strings.HasPrefix(trimmed, "Script ") ||
-			strings.HasPrefix(trimmed, "🎥 Starting recorded") ||
-			strings.HasPrefix(trimmed, "Commands and output") ||
-			strings.HasPrefix(trimmed, "Type 'exit'") ||
-			trimmed == "exit" ||
-			strings.HasPrefix(trimmed, "exit ") ||
-			strings.Contains(trimmed, "Copied to clipboard!") {
+		// Skip script headers
+		if strings.HasPrefix(trimmed, "Script ") || strings.HasPrefix(trimmed, "Copied to clipboard") {
 			continue
 		}
 
-		// Check for command prompt
-		var command string
-		for _, pattern := range promptPatterns {
-			if matches := pattern.FindStringSubmatch(line); len(matches) > 1 {
-				cmd := strings.TrimSpace(matches[1])
-				// Skip context commands and very short/empty commands
-				if len(cmd) > 0 && !strings.HasPrefix(cmd, "context ") && cmd != "context" && cmd != "exit" {
-					command = cmd
-					break
-				}
-			}
-		}
+		// Look for command in title sequence
+		if matches := titlePattern.FindStringSubmatch(line); len(matches) > 1 {
+			cmd := strings.TrimSpace(matches[1])
 
-		if command != "" {
-			// Skip "exit" commands (user ending recording session)
-			if command == "exit" || strings.HasPrefix(command, "exit ") {
+			// Skip prompt-only titles
+			if cmd == "~" || cmd == "/" || regexp.MustCompile(`^[~/][^ ]*$`).MatchString(cmd) {
 				continue
 			}
-			
+
+			// Skip context commands
+			if strings.HasPrefix(cmd, "context ") || cmd == "context" {
+				continue
+			}
+
+			// Skip exit
+			if cmd == "exit" || strings.HasPrefix(cmd, "exit ") {
+				continue
+			}
+
 			// Save previous entry
-			if currentEntry != nil {
+			if currentEntry != nil && len(outputLines) > 0 {
 				currentEntry.Output = cleanOutput(strings.Join(outputLines, "\n"))
 				entries = append(entries, *currentEntry)
 			}
+
 			// Start new entry
-			currentEntry = &LogEntry{Command: command}
-			outputLines = []string{}
-		} else if currentEntry != nil {
-			// Skip exit and script done lines
-			if trimmed == "exit" || strings.HasPrefix(trimmed, "exit ") ||
-				strings.HasPrefix(trimmed, "Script done") {
+			currentEntry = &LogEntry{Command: cmd}
+			outputLines = nil
+			continue
+		}
+
+		// Collect output
+		if currentEntry != nil {
+			// Skip prompt lines
+			if isPromptLine(trimmed) {
 				continue
 			}
 			outputLines = append(outputLines, line)
 		}
 	}
 
-	// Don't forget the last entry (skip if it's just "exit")
-	if currentEntry != nil && currentEntry.Command != "exit" && !strings.HasPrefix(currentEntry.Command, "exit ") {
+	// Save last entry
+	if currentEntry != nil && len(outputLines) > 0 {
 		currentEntry.Output = cleanOutput(strings.Join(outputLines, "\n"))
 		entries = append(entries, *currentEntry)
 	}
@@ -321,51 +308,94 @@ func (r *Reader) parseTypescript(content string) []LogEntry {
 	return entries
 }
 
-// stripANSI removes ANSI escape codes
-func stripANSI(s string) string {
-	ansiRegex := regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]|\x1b\][^\x07]*\x07|\x1b[PX^_][^\x1b]*\x1b\\|\x1b\[[0-9;]*[mKHJPqsu]|\x1b[ c\(\)][0-9]*`)
-	return ansiRegex.ReplaceAllString(s, "")
+// stripAllEscapes removes ALL escape sequences
+func stripAllEscapes(content string) string {
+	// OSC sequences: ESC ] <params> BEL or ESC \ 
+	// Params can include digits, semicolons, letters
+	// Keep removing until stable
+	for {
+		// Match OSC with BEL terminator
+		newContent := regexp.MustCompile(`\x1b\][0-9;:A-Za-z]+[^\x07\x1b]*\x07`).ReplaceAllString(content, "")
+		// Match OSC with ST terminator (ESC \)
+		newContent = regexp.MustCompile(`\x1b\][0-9;:A-Za-z]+[^\x07\x1b]*\x1b\\`).ReplaceAllString(newContent, "")
+		// Catch any remaining OSC-like sequences
+		newContent = regexp.MustCompile(`\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?`).ReplaceAllString(newContent, "")
+		if newContent == content {
+			break
+		}
+		content = newContent
+	}
+
+	// Remove CSI sequences (ESC [ ... letter)  
+	content = regexp.MustCompile(`\x1b\[[0-9;:!?<>]*[a-zA-Z@]`).ReplaceAllString(content, "")
+
+	// Remove other escape sequences
+	content = regexp.MustCompile(`\x1b[()][0-9A-Za-z~]`).ReplaceAllString(content, "")
+	content = regexp.MustCompile(`\x1b[#%\*\+\-\\\.\/:]`).ReplaceAllString(content, "")
+	content = regexp.MustCompile(`\x1b[NOc\|\}^G_@=]`).ReplaceAllString(content, "")
+
+	// Remove orphaned ESC characters
+	content = strings.ReplaceAll(content, "\x1b", "")
+
+	// Remove backspace characters
+	var result []rune
+	for _, r := range content {
+		if r != '\b' && r != 0x7f {
+			result = append(result, r)
+		}
+	}
+
+	// Normalize line endings
+	content = strings.ReplaceAll(string(result), "\r\n", "\n")
+	content = strings.ReplaceAll(content, "\r", "\n")
+
+	return content
 }
 
-// cleanOutput cleans output text
-func cleanOutput(s string) string {
-	s = strings.TrimSpace(s)
-	// Collapse multiple blank lines
-	for strings.Contains(s, "\n\n\n") {
-		s = strings.ReplaceAll(s, "\n\n\n", "\n\n")
-	}
-	// Remove trailing prompt lines
-	lines := strings.Split(s, "\n")
-	for len(lines) > 0 {
-		lastLine := strings.TrimSpace(lines[len(lines)-1])
-		if lastLine == "" {
-			lines = lines[:len(lines)-1]
-			continue
-		}
-		if isPromptLine(lastLine) {
-			lines = lines[:len(lines)-1]
-			continue
-		}
-		break
-	}
-	return strings.Join(lines, "\n")
-}
-
+// isPromptLine checks if line looks like a shell prompt
 func isPromptLine(line string) bool {
-	// Match prompts even with commands after them (for trailing prompt removal)
-	promptPatterns := []*regexp.Regexp{
-		regexp.MustCompile(`[~\/][^❯]*❯`),
-		regexp.MustCompile(`\$\s+`),
-		regexp.MustCompile(`%\s+`),
-		regexp.MustCompile(`>\s+`),
-		regexp.MustCompile(`\[[^\]]+\][#\$]\s+`),
+	if strings.TrimSpace(line) == "" {
+		return false
 	}
-	for _, p := range promptPatterns {
+
+	// Match common prompt patterns
+	patterns := []*regexp.Regexp{
+		regexp.MustCompile(`^[~\/][^❯]*❯`),
+		regexp.MustCompile(`^\[[^\]]+\][#\$]`),
+		regexp.MustCompile(`^\$\s`),
+		regexp.MustCompile(`^%\s`),
+		regexp.MustCompile(`^>`),
+	}
+
+	for _, p := range patterns {
 		if p.MatchString(line) {
 			return true
 		}
 	}
+
+	// Single char prompt (just ~ or $)
+	if regexp.MustCompile(`^[~\$%#]\s*$`).MatchString(line) {
+		return true
+	}
+
 	return false
+}
+
+// stripANSI removes basic ANSI codes (for log files)
+func stripANSI(s string) string {
+	return regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]`).ReplaceAllString(s, "")
+}
+
+// cleanOutput final cleanup
+func cleanOutput(s string) string {
+	s = strings.TrimSpace(s)
+
+	// Collapse multiple blank lines
+	for strings.Contains(s, "\n\n\n") {
+		s = strings.ReplaceAll(s, "\n\n\n", "\n\n")
+	}
+
+	return s
 }
 
 // FormatEntries formats log entries
