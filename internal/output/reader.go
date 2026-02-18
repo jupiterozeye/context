@@ -223,7 +223,7 @@ func (r *Reader) readFromTypescript(n int) ([]LogEntry, error) {
 
 	entries := r.parseTypescript(string(content))
 	if len(entries) == 0 {
-		return nil, fmt.Errorf("no commands found in typescript")
+		return nil, fmt.Errorf("no commands recorded yet. run some commands first")
 	}
 
 	// Return last n entries
@@ -237,27 +237,34 @@ func (r *Reader) readFromTypescript(n int) ([]LogEntry, error) {
 func (r *Reader) parseTypescript(content string) []LogEntry {
 	var entries []LogEntry
 
-	// First, strip all escapes
-	cleanContent := stripAllEscapes(content)
-
-	// Extract commands from prompt lines (format: ~ ❯ command or ~ > command)
-	// Looking for patterns like "~ ❯ =context dir ...>" or "~ > command"
-	commands := extractCommandsFromPrompts(cleanContent)
+	// Extract commands and their positions from OSC sequences
+	commands := extractCommandsFromOSC(content)
 	if len(commands) == 0 {
 		return entries
 	}
 
-	// Split clean content by command to extract output
-	for i, cmd := range commands {
+	// Build entries from commands
+	for i, cmdInfo := range commands {
+		cmd := cmdInfo.command
 		if cmd == "" || cmd == "exit" || strings.HasPrefix(cmd, "exit ") {
 			continue
 		}
-		if strings.HasPrefix(cmd, "context ") && cmd != "context rec" {
+		// Skip context last to avoid recursion
+		if cmd == "context last" || strings.HasPrefix(cmd, "context last ") {
 			continue
 		}
 
-		// Find output for this command
-		output := extractOutputForCommand(cleanContent, cmd, i, commands)
+		// Extract output between this command and the next
+		var nextPos int
+		if i+1 < len(commands) {
+			nextPos = commands[i+1].position
+		} else {
+			nextPos = len(content)
+		}
+
+		// Extract output from original content between positions
+		section := content[cmdInfo.position:nextPos]
+		output := extractCleanOutput(section)
 
 		entries = append(entries, LogEntry{
 			Command: cmd,
@@ -268,87 +275,107 @@ func (r *Reader) parseTypescript(content string) []LogEntry {
 	return entries
 }
 
-// extractCommandsFromPrompts extracts commands from shell prompt lines
-func extractCommandsFromPrompts(content string) []string {
-	var commands []string
+// commandInfo holds a command and its position in the original content
+type commandInfo struct {
+	command  string
+	position int
+}
+
+// extractCommandsFromOSC extracts commands from OSC window title sequences
+func extractCommandsFromOSC(content string) []commandInfo {
+	var commands []commandInfo
 	seen := make(map[string]bool)
 
-	lines := strings.Split(content, "\n")
+	// Match OSC 2 or 0 sequences: ESC ] 0/2 ; title BEL or ESC \ 
+	oscPattern := regexp.MustCompile("\x1b][02];([^\x07\x1b]+)")
 
-	// Pattern: prompt ending with command, possibly with `=` prefix and `>` suffix
-	// Examples: "~ ❯ =context dir ...>" or "> ls" or "% cd .."
-	promptPatterns := []*regexp.Regexp{
-		// Starship-style: path ❯ command
-		regexp.MustCompile(`[\s]*[~\/]?[^❯]*❯[\s]*=?([^>]+)>?\s*$`),
-		// Simple > or % prompt
-		regexp.MustCompile(`^[\s]*[%>]\s*=?([^>]+)>?\s*$`),
-		// $ prompt
-		regexp.MustCompile(`^[\s]*\$\s*=?([^>]+)>?\s*$`),
-	}
-
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-
-		// Skip empty lines and noise
-		if line == "" || strings.HasPrefix(line, "Script ") {
-			continue
-		}
-
-		// Try each pattern
-		for _, pattern := range promptPatterns {
-			if matches := pattern.FindStringSubmatch(line); len(matches) > 1 {
-				cmd := strings.TrimSpace(matches[1])
-				// Clean up any remaining markers
-				cmd = strings.TrimPrefix(cmd, "=")
-				cmd = strings.TrimSuffix(cmd, ">")
-				cmd = strings.TrimSpace(cmd)
-
-				// Filter
-				if cmd == "" || cmd == "~" || cmd == "/" {
-					continue
-				}
-				if seen[cmd] {
-					continue
-				}
-				seen[cmd] = true
-				commands = append(commands, cmd)
-				break
+	// Find all matches with their positions
+	matches := oscPattern.FindAllStringSubmatchIndex(content, -1)
+	for _, m := range matches {
+		if len(m) >= 4 {
+			// m[0], m[1] = full match start/end
+			// m[2], m[3] = group 1 (command) start/end
+			cmd := strings.TrimSpace(content[m[2]:m[3]])
+			
+			// Filter out prompt-only titles
+			// Filter out prompt-only and unwanted commands
+			if isPromptOnly(cmd) {
+				continue
 			}
+			if cmd == "context last" || strings.HasPrefix(cmd, "context last ") {
+				continue
+			}
+			// Skip duplicates
+			if seen[cmd] {
+				continue
+			}
+			seen[cmd] = true
+			commands = append(commands, commandInfo{
+				command:  cmd,
+				position: m[1], // End of full match (after BEL or ST)
+			})
 		}
 	}
 
 	return commands
 }
 
-// extractOutputForCommand extracts output between command and next command
-func extractOutputForCommand(content, cmd string, cmdIndex int, allCommands []string) string {
-	// Find the position of this command in content
-	cmdPos := strings.Index(content, cmd)
-	if cmdPos == -1 {
-		return ""
+// isPromptOnly checks if a title is just a path/prompt without a command
+func isPromptOnly(title string) bool {
+	if title == "" || title == "~" || title == "/" {
+		return true
 	}
+	// Just a path
+	if regexp.MustCompile(`^[~/][^ ]*$`).MatchString(title) {
+		return true
+	}
+	return false
+}
 
-	// Find where next command starts
-	var endPos int
-	if cmdIndex+1 < len(allCommands) {
-		nextCmd := allCommands[cmdIndex+1]
-		endPos = strings.Index(content[cmdPos+len(cmd):], nextCmd)
-		if endPos == -1 {
-			endPos = len(content)
-		} else {
-			endPos += cmdPos + len(cmd)
+// extractCleanOutput extracts clean output from a section of typescript
+func extractCleanOutput(section string) string {
+	// Strip all escapes
+	clean := stripAllEscapes(section)
+
+	// Split into lines
+	lines := strings.Split(clean, "\n")
+
+	// Find where actual output starts (skip prompt lines)
+	var startIdx int
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
 		}
-	} else {
-		endPos = len(content)
+		// Skip prompt-like lines at the start
+		if isPromptLine(trimmed) {
+			startIdx = i + 1
+			continue
+		}
+		// Found first non-prompt line
+		break
+	}
+	lines = lines[startIdx:]
+
+	// Remove trailing prompt/empty lines
+	for len(lines) > 0 {
+		last := strings.TrimSpace(lines[len(lines)-1])
+		if last == "" || isPromptLine(last) || isNoiseLine(last) {
+			lines = lines[:len(lines)-1]
+		} else {
+			break
+		}
 	}
 
-	// Extract output between commands
-	section := content[cmdPos+len(cmd) : endPos]
+	// Join remaining lines
+	result := strings.Join(lines, "\n")
 
-	// Clean up the output
-	section = cleanOutput(section)
+	// Collapse multiple blank lines
+	for strings.Contains(result, "\n\n\n") {
+		result = strings.ReplaceAll(result, "\n\n\n", "\n\n")
+	}
 
-	return section
+	return strings.TrimSpace(result)
 }
 
 // stripAllEscapes removes terminal escape sequences
@@ -380,43 +407,6 @@ func stripAllEscapes(content string) string {
 	content = strings.ReplaceAll(content, "\r", "\n")
 
 	return content
-}
-
-// cleanOutput final cleanup
-func cleanOutput(s string) string {
-	s = strings.TrimSpace(s)
-
-	// Remove everything up to and including the first prompt-like line
-	lines := strings.Split(s, "\n")
-	var startIdx int
-	for i, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if isPromptLine(trimmed) {
-			startIdx = i + 1
-		}
-	}
-	if startIdx > 0 && startIdx < len(lines) {
-		lines = lines[startIdx:]
-	}
-
-	// Remove trailing prompt lines
-	for len(lines) > 0 {
-		last := strings.TrimSpace(lines[len(lines)-1])
-		if last == "" || isPromptLine(last) || isNoiseLine(last) {
-			lines = lines[:len(lines)-1]
-		} else {
-			break
-		}
-	}
-
-	s = strings.Join(lines, "\n")
-
-	// Collapse multiple blank lines
-	for strings.Contains(s, "\n\n\n") {
-		s = strings.ReplaceAll(s, "\n\n\n", "\n\n")
-	}
-
-	return strings.TrimSpace(s)
 }
 
 // isPromptLine checks if line is a shell prompt
