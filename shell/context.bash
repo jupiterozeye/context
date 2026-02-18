@@ -26,8 +26,8 @@ fi
 
 # Rotate typescript if too large
 if [[ -f "$CONTEXT_TYPESCRIPT" ]]; then
-    local size=$(stat -c%s "$CONTEXT_TYPESCRIPT" 2>/dev/null || echo 0)
-    local max=$((CONTEXT_MAX_SIZE_MB * 1024 * 1024))
+    size=$(stat -c%s "$CONTEXT_TYPESCRIPT" 2>/dev/null || echo 0)
+    max=$((CONTEXT_MAX_SIZE_MB * 1024 * 1024))
     if [[ $size -gt $max ]]; then
         # Keep last 10MB
         tail -c 10485760 "$CONTEXT_TYPESCRIPT" > "${CONTEXT_TYPESCRIPT}.tmp" 2>/dev/null
