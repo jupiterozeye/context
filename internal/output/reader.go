@@ -174,9 +174,13 @@ func (r *Reader) readFromTypescript(n int) ([]LogEntry, error) {
 
 func stripEscapeSequences(s string) string {
 	// Remove ANSI escape codes
+	// CSI sequences: ESC [ ... letter
 	s = regexp.MustCompile("\x1b\\[[0-9;]*[a-zA-Z]").ReplaceAllString(s, "")
+	// OSC sequences with BEL terminator: ESC ] ... BEL
 	s = regexp.MustCompile("\x1b][^\x07]*\x07").ReplaceAllString(s, "")
-	s = regexp.MustCompile("\x1b][^\x1b\\]*\x1b\\\\").ReplaceAllString(s, "")
+	// OSC sequences with ST terminator: ESC ] ... ESC \
+	s = regexp.MustCompile("\x1b]([^\x1b]|\x1b[^\\])*\x1b\\").ReplaceAllString(s, "")
+	// Remove orphaned ESC
 	s = strings.ReplaceAll(s, "\x1b", "")
 	s = strings.ReplaceAll(s, "\r", "")
 	return s
