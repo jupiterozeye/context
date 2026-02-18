@@ -88,7 +88,7 @@ Clipboard may not work inside the recorded session - use `--print` to see output
 ### `context rec` - Record session with full output
 
 Starts a recorded shell session where all commands and their output are captured.
-Each session gets a unique ID and is isolated from other terminals.
+Each session is isolated from other terminals.
 
 ```bash
 # Start recording
@@ -106,7 +106,15 @@ exit
 context last
 ```
 
-**Note:** When using `context rec`, `context last` only shows commands from the current terminal session.
+**How it works:**
+- `context rec` starts a new shell with `CONTEXT_RECORDING=1`
+- Shell integration (if enabled in your config) captures every command and its output
+- Commands are logged to `~/.context/logs/<session_id>/`
+- `context last` reads from the current session's logs
+
+**Without shell integration:**
+If you don't have shell integration enabled, `context rec` won't capture anything.
+Install the integration first (see Setup below).
 
 ### `context flush` - Clear all logs
 
@@ -119,7 +127,9 @@ context flush
 
 ### Setup
 
-To enable automatic command logging, add shell integration to your config:
+**Required for `context rec` and `context last`:**
+
+Add shell integration to your config:
 
 **Bash:**
 ```bash
@@ -139,9 +149,9 @@ echo 'source /usr/local/share/context/shell/context.fish' >> ~/.config/fish/conf
 Then restart your terminal or run `source ~/.bashrc` (or `~/.zshrc`, etc.).
 
 **What it does:**
-- Logs commands you run to `~/.context/logs/`
+- Captures command output using shell hooks (preexec/precmd)
+- Logs to session-specific directories
 - Auto-rotated (30-day retention, max 100MB)
-- `context last` shows commands from logs or recorded sessions
 
 ## Examples
 
