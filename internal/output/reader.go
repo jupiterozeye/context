@@ -32,21 +32,38 @@ type Reader struct {
 	opts           Options
 	logDir         string
 	typescriptPath string
+	sessionID      string
 }
 
 // NewReader creates a new log reader
 func NewReader(opts Options) *Reader {
 	homeDir, _ := os.UserHomeDir()
+	
+	// Check if we're in a recorded session
+	sessionID := os.Getenv("CONTEXT_SESSION_ID")
+	
+	var logDir, typescriptPath string
+	if sessionID != "" {
+		// Use session-specific directory
+		logDir = filepath.Join(homeDir, ".context", "logs", sessionID)
+		typescriptPath = filepath.Join(logDir, "typescript")
+	} else {
+		// Use main logs directory
+		logDir = filepath.Join(homeDir, ".context", "logs")
+		typescriptPath = filepath.Join(homeDir, ".context", "typescript")
+	}
+	
 	return &Reader{
 		opts:           opts,
-		logDir:         filepath.Join(homeDir, ".context", "logs"),
-		typescriptPath: filepath.Join(homeDir, ".context", "typescript"),
+		logDir:         logDir,
+		typescriptPath: typescriptPath,
+		sessionID:      sessionID,
 	}
 }
 
 // Read retrieves the last n log entries
 func (r *Reader) Read(n int) ([]LogEntry, error) {
-	// Use typescript if it exists and has content (prioritize recorded sessions)
+	// Use typescript if it exists and has content (for recorded sessions)
 	if _, err := os.Stat(r.typescriptPath); err == nil {
 		entries, err := r.readFromTypescript(n)
 		if err == nil && len(entries) > 0 {
