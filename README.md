@@ -55,15 +55,15 @@ context dir --no-copy  # Just print, don't copy to clipboard
 - `-H, --hidden` - Include hidden files
 - `-c, --no-copy` - Print only, don't copy
 
-### `context last` - Share recent commands with output
+### `context last` - Share recent commands
 
-**Requires shell integration** (see [Setup](#setup) below).
+Shows your recently run commands. For full output capture, see `context rec` below.
 
 ```bash
-# Last command with output
+# Last command
 context last
 
-# Last 5 commands with output
+# Last 5 commands
 context last 5
 
 # Markdown format
@@ -75,11 +75,31 @@ context last 3 --format detailed
 
 **Flags:**
 - `-f, --format` - Output format: `raw` (default), `markdown`, or `detailed`
-- `-c, --no-copy` - Print only, don't copy
+- `-c, `--no-copy` - Print only, don't copy
+
+### `context rec` - Record session with full output
+
+Starts a recorded shell session where all commands and their output are captured.
+
+```bash
+# Start recording
+context rec
+
+# Run your commands...
+ls -la
+cat file.txt
+make test
+
+# Stop recording with 'exit'
+exit
+
+# Now get the captured commands with output
+context last
+```
 
 ### Setup
 
-To enable `context last` with command output capture, add shell integration to your config:
+To enable automatic command logging, add shell integration to your config:
 
 **Bash:**
 ```bash
@@ -99,9 +119,9 @@ echo 'source /usr/local/share/context/shell/context.fish' >> ~/.config/fish/conf
 Then restart your terminal or run `source ~/.bashrc` (or `~/.zshrc`, etc.).
 
 **What it does:**
-- Captures command output in real-time as you work
-- Stores logs in `~/.context/logs/` (auto-rotated, max 100MB, 30-day retention)
-- `context last` reads from these logs to show commands AND their output
+- Logs commands you run to `~/.context/logs/`
+- Auto-rotated (30-day retention, max 100MB)
+- `context last` shows commands from logs or recorded sessions
 
 ## Examples
 
