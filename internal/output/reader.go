@@ -45,13 +45,13 @@ func NewReader(opts Options) *Reader {
 
 // Read retrieves the last n log entries
 func (r *Reader) Read(n int) ([]LogEntry, error) {
-	// First, try to read from typescript if it exists (has actual output)
-	if entries, err := r.readFromTypescript(n); err == nil && len(entries) > 0 {
+	// First, try to read from log files (preferred, has structured output)
+	if entries, err := r.readFromLogFiles(n); err == nil && len(entries) > 0 {
 		return entries, nil
 	}
 
-	// Fall back to log files (command metadata only)
-	return r.readFromLogFiles(n)
+	// Fall back to typescript file
+	return r.readFromTypescript(n)
 }
 
 // readFromLogFiles reads from individual log files
