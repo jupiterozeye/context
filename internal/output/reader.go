@@ -1,12 +1,10 @@
 package output
 
 import (
-	"bufio"
 	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
-	"sort"
 	"strings"
 	"time"
 )
@@ -24,37 +22,36 @@ type LogEntry struct {
 
 // Options for reading log files
 type Options struct {
-	Format string // raw, markdown, detailed
+	Format string
 }
 
 // Reader handles reading and parsing log files
 type Reader struct {
 	opts           Options
-	sessionDir     string
+	typescriptPath string
 	isRecording    bool
 }
 
 // NewReader creates a new log reader
 func NewReader(opts Options) *Reader {
 	homeDir, _ := os.UserHomeDir()
-	
-	// Check if we're in a recorded session
-	sessionID := os.Getenv("CONTEXT_SESSION_ID")
 	isRecording := os.Getenv("CONTEXT_RECORDING") == "1"
 	
-	var sessionDir string
-	if sessionID != "" {
-		// Use session-specific directory
-		sessionDir = filepath.Join(homeDir, ".context", "logs", sessionID)
-		isRecording = true
-	} else {
-		// Fall back to main logs directory (for backwards compatibility)
-		sessionDir = filepath.Join(homeDir, ".context", "logs")
+	// Use typescript from current directory if recording
+	typescriptPath := filepath.Join(homeDir, ".context", "typescript")
+	if _, err := os.Stat("typescript"); err == nil {
+		// Check if this is our recording
+		if data, err := os.ReadFile("typescript"); err == nil {
+			if strings.Contains(string(data), "CONTEXT_SESSION") || isRecording {
+				typescriptPath = "typescript"
+				isRecording = true
+			}
+		}
 	}
 	
 	return &Reader{
 		opts:           opts,
-		sessionDir:     sessionDir,
+		typescriptPath: typescriptPath,
 		isRecording:    isRecording,
 	}
 }
@@ -66,152 +63,140 @@ func (r *Reader) IsRecording() bool {
 
 // Read retrieves the last n log entries
 func (r *Reader) Read(n int) ([]LogEntry, error) {
-	// Must be in a recording session
 	if !r.isRecording {
-		return nil, fmt.Errorf("not in a recorded session. run 'context rec' first to start recording")
+		return nil, fmt.Errorf("not in a recorded session. run 'context rec' first")
 	}
 
-	// Read from session log files
-	return r.readFromLogFiles(n)
-}
-
-// readFromLogFiles reads from individual log files
-func (r *Reader) readFromLogFiles(n int) ([]LogEntry, error) {
-	files, err := os.ReadDir(r.sessionDir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("no commands recorded yet. run some commands first")
-		}
-		return nil, fmt.Errorf("failed to read log directory: %w", err)
-	}
-
-	// Filter and sort log files by modification time (newest first)
-	var logFiles []os.DirEntry
-	for _, file := range files {
-		if strings.HasSuffix(file.Name(), ".log") {
-			logFiles = append(logFiles, file)
+	// Try to read from typescript
+	if _, err := os.Stat(r.typescriptPath); err == nil {
+		entries, err := r.readFromTypescript(n)
+		if err == nil && len(entries) > 0 {
+			return entries, nil
 		}
 	}
 
-	if len(logFiles) == 0 {
-		return nil, fmt.Errorf("no commands recorded yet. run some commands first")
-	}
-
-	// Sort by mod time descending
-	sort.Slice(logFiles, func(i, j int) bool {
-		fi, _ := logFiles[i].Info()
-		fj, _ := logFiles[j].Info()
-		return fi.ModTime().After(fj.ModTime())
-	})
-
-	// Read the last n entries
-	var entries []LogEntry
-	for i := 0; i < n && i < len(logFiles); i++ {
-		entry, err := r.parseLogFile(filepath.Join(r.sessionDir, logFiles[i].Name()))
-		if err == nil && entry != nil {
-			entries = append(entries, *entry)
-		}
-	}
-
-	// Reverse so oldest is first
-	reverseEntries(entries)
-
-	return entries, nil
+	return nil, fmt.Errorf("no commands recorded yet")
 }
 
-func reverseEntries(entries []LogEntry) {
-	for i, j := 0, len(entries)-1; i < j; i, j = i+1, j-1 {
-		entries[i], entries[j] = entries[j], entries[i]
-	}
-}
-
-// parseLogFile parses a single log file into a LogEntry
-func (r *Reader) parseLogFile(path string) (*LogEntry, error) {
-	file, err := os.Open(path)
+// readFromTypescript reads commands from script typescript
+func (r *Reader) readFromTypescript(n int) ([]LogEntry, error) {
+	content, err := os.ReadFile(r.typescriptPath)
 	if err != nil {
 		return nil, err
 	}
-	defer file.Close()
 
-	entry := &LogEntry{}
-	scanner := bufio.NewScanner(file)
-
-	inOutput := false
+	// Simple parsing: look for command lines (lines starting with prompt patterns)
+	lines := strings.Split(string(content), "\n")
+	
+	var entries []LogEntry
+	var currentCmd string
 	var outputLines []string
-
-	for scanner.Scan() {
-		line := scanner.Text()
-
-		if strings.HasPrefix(line, "=== OUTPUT:") {
+	inOutput := false
+	
+	// Simple prompt patterns
+	cmdPattern := regexp.MustCompile(`^[\s]*[~\/]?[^❯]*❯\s+(.+)$|^\$\s+(.+)$|^%\s+(.+)$`)
+	
+	for _, line := range lines {
+		// Clean escape sequences
+		cleanLine := stripEscapeSequences(line)
+		trimmed := strings.TrimSpace(cleanLine)
+		
+		// Skip noise
+		if trimmed == "" || strings.HasPrefix(trimmed, "Script ") {
+			continue
+		}
+		
+		// Check for command
+		if matches := cmdPattern.FindStringSubmatch(cleanLine); matches != nil {
+			// Save previous command
+			if currentCmd != "" && len(outputLines) > 0 {
+				output := strings.TrimSpace(strings.Join(outputLines, "\n"))
+				// Filter out the next prompt from output
+				lines := strings.Split(output, "\n")
+				for len(lines) > 0 && isPromptLine(lines[len(lines)-1]) {
+					lines = lines[:len(lines)-1]
+				}
+				
+				entries = append(entries, LogEntry{
+					Command: currentCmd,
+					Output:  strings.TrimSpace(strings.Join(lines, "\n")),
+				})
+			}
+			
+			// Extract command
+			for i := 1; i < len(matches); i++ {
+				if matches[i] != "" {
+					currentCmd = strings.TrimSpace(matches[i])
+					break
+				}
+			}
+			
+			// Skip context commands
+			if strings.HasPrefix(currentCmd, "context ") && currentCmd != "context rec" {
+				currentCmd = ""
+				continue
+			}
+			
+			outputLines = nil
 			inOutput = true
 			continue
 		}
-
-		if inOutput {
-			outputLines = append(outputLines, line)
-			continue
-		}
-
-		// Parse header fields
-		if strings.HasPrefix(line, "=== COMMAND: ") {
-			entry.Command = strings.TrimPrefix(line, "=== COMMAND: ")
-		} else if strings.HasPrefix(line, "=== START_TIME: ") {
-			timeStr := strings.TrimPrefix(line, "=== START_TIME: ")
-			entry.StartTime, _ = time.Parse("2006-01-02 15:04:05", timeStr)
-		} else if strings.HasPrefix(line, "=== END_TIME: ") {
-			timeStr := strings.TrimPrefix(line, "=== END_TIME: ")
-			entry.EndTime, _ = time.Parse("2006-01-02 15:04:05", timeStr)
-		} else if strings.HasPrefix(line, "=== DURATION: ") {
-			durStr := strings.TrimPrefix(line, "=== DURATION: ")
-			durStr = strings.TrimSuffix(durStr, "s")
-			var secs int
-			fmt.Sscanf(durStr, "%d", &secs)
-			entry.Duration = time.Duration(secs) * time.Second
-		} else if strings.HasPrefix(line, "=== EXIT_CODE: ") {
-			codeStr := strings.TrimPrefix(line, "=== EXIT_CODE: ")
-			fmt.Sscanf(codeStr, "%d", &entry.ExitCode)
-		} else if strings.HasPrefix(line, "=== WORKING_DIR: ") {
-			entry.WorkingDir = strings.TrimPrefix(line, "=== WORKING_DIR: ")
+		
+		if inOutput && currentCmd != "" {
+			outputLines = append(outputLines, cleanLine)
 		}
 	}
-
-	// Clean output
-	output := strings.Join(outputLines, "\n")
-	output = stripANSI(output)
-	output = strings.TrimSpace(output)
 	
-	// Remove the "$ command" line from output if present
-	lines := strings.Split(output, "\n")
-	if len(lines) > 0 && strings.HasPrefix(lines[0], "$ ") {
-		lines = lines[1:]
+	// Save last command
+	if currentCmd != "" && len(outputLines) > 0 {
+		output := strings.TrimSpace(strings.Join(outputLines, "\n"))
+		lines := strings.Split(output, "\n")
+		for len(lines) > 0 && isPromptLine(lines[len(lines)-1]) {
+			lines = lines[:len(lines)-1]
+		}
+		
+		entries = append(entries, LogEntry{
+			Command: currentCmd,
+			Output:  strings.TrimSpace(strings.Join(lines, "\n")),
+		})
 	}
-	output = strings.Join(lines, "\n")
 	
-	output = filterBatWarnings(output)
-
-	entry.Output = output
-
-	return entry, nil
+	if len(entries) == 0 {
+		return nil, fmt.Errorf("no commands found")
+	}
+	
+	// Return last n
+	if n > len(entries) {
+		n = len(entries)
+	}
+	return entries[len(entries)-n:], nil
 }
 
-func filterBatWarnings(output string) string {
-	if !strings.Contains(output, "[bat warning]") {
-		return output
-	}
-	lines := strings.Split(output, "\n")
-	var filtered []string
-	for _, line := range lines {
-		if !strings.Contains(line, "[bat warning]") {
-			filtered = append(filtered, line)
-		}
-	}
-	return strings.Join(filtered, "\n")
+func stripEscapeSequences(s string) string {
+	// Remove ANSI escape codes
+	s = regexp.MustCompile("\x1b\\[[0-9;]*[a-zA-Z]").ReplaceAllString(s, "")
+	s = regexp.MustCompile("\x1b][^\x07]*\x07").ReplaceAllString(s, "")
+	s = regexp.MustCompile("\x1b][^\x1b\\]*\x1b\\\\").ReplaceAllString(s, "")
+	s = strings.ReplaceAll(s, "\x1b", "")
+	s = strings.ReplaceAll(s, "\r", "")
+	return s
 }
 
-// stripANSI removes ANSI escape codes
-func stripANSI(s string) string {
-	ansiRegex := regexp.MustCompile("\x1b\\[[0-9;]*[a-zA-Z]")
-	return ansiRegex.ReplaceAllString(s, "")
+func isPromptLine(line string) bool {
+	if strings.TrimSpace(line) == "" {
+		return false
+	}
+	// Common prompt endings
+	if regexp.MustCompile(`[~\/][^❯]*❯\s*$`).MatchString(line) {
+		return true
+	}
+	if regexp.MustCompile(`^\$\s*$`).MatchString(line) {
+		return true
+	}
+	if regexp.MustCompile(`^%\s*$`).MatchString(line) {
+		return true
+	}
+	return false
 }
 
 // FormatEntries formats log entries

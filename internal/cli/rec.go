@@ -25,6 +25,9 @@ func runRec(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("already in a recorded session")
 	}
 
+	// Remove old typescript if exists
+	os.Remove("typescript")
+
 	// Detect shell
 	shell := os.Getenv("SHELL")
 	if shell == "" {
@@ -32,21 +35,19 @@ func runRec(cmd *cobra.Command, args []string) error {
 	}
 
 	fmt.Println("🎥 Starting recorded shell session...")
-	fmt.Println("   All commands will be captured for 'context last'")
 	fmt.Println("   Type 'exit' to stop recording")
 	fmt.Println()
 
-	// Start new shell with recording enabled
-	shellCmd := exec.Command(shell, "-i")
-	shellCmd.Stdin = os.Stdin
-	shellCmd.Stdout = os.Stdout
-	shellCmd.Stderr = os.Stderr
-	shellCmd.Env = append(os.Environ(),
+	// Start script session
+	scriptCmd := exec.Command("script", "-q", "-c", shell+" -i")
+	scriptCmd.Stdin = os.Stdin
+	scriptCmd.Stdout = os.Stdout
+	scriptCmd.Stderr = os.Stderr
+	scriptCmd.Env = append(os.Environ(),
 		"CONTEXT_RECORDING=1",
-		"CONTEXT_LOG_ENABLED=1",
 	)
 
-	if err := shellCmd.Run(); err != nil {
+	if err := scriptCmd.Run(); err != nil {
 		// Don't error on normal exit
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			os.Exit(exitErr.ExitCode())
