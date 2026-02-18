@@ -55,9 +55,10 @@ context dir --no-copy  # Just print, don't copy to clipboard
 - `-H, --hidden` - Include hidden files
 - `-c, --no-copy` - Print only, don't copy
 
-### `context last` - Share recent commands
+### `context last` - Share recent commands (requires recording)
 
-Shows your recently run commands. For full output capture, see `context rec` below.
+**Must be run inside a recorded session** (started with `context rec`).
+Shows commands and output from the current terminal session.
 
 ```bash
 # Last command
@@ -76,6 +77,8 @@ context last 3 --format detailed
 **Flags:**
 - `-f, --format` - Output format: `raw` (default), `markdown`, or `detailed`
 - `-c, --no-copy` - Print only, don't copy
+
+**Note:** This command only works after running `context rec`. Each terminal session is isolated.
 
 ### `context rec` - Record session with full output
 
