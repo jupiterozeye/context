@@ -58,27 +58,32 @@ context dir --no-copy  # Just print, don't copy to clipboard
 ### `context last` - Share recent commands (requires recording)
 
 **Must be run inside a recorded session** (started with `context rec`).
-Shows commands and output from the current terminal session.
+Copies commands and output from the current terminal session to clipboard.
 
 ```bash
-# Last command
+# Last command (copies to clipboard, no terminal output)
 context last
 
 # Last 5 commands
 context last 5
 
+# Print to terminal as well as copying
+context last --print
+
 # Markdown format
-context last 10 --format markdown
+context last 10 --format markdown --print
 
 # Detailed format with metadata
-context last 3 --format detailed
+context last 3 --format detailed --print
 ```
 
 **Flags:**
 - `-f, --format` - Output format: `raw` (default), `markdown`, or `detailed`
-- `-c, --no-copy` - Print only, don't copy
+- `-c, --no-copy` - Don't copy to clipboard
+- `-p, --print` - Print output to terminal (default: just confirmation)
 
 **Note:** This command only works after running `context rec`. Each terminal session is isolated.
+Clipboard may not work inside the recorded session - use `--print` to see output in that case.
 
 ### `context rec` - Record session with full output
 

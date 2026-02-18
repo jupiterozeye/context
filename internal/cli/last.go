@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"os"
 	"strconv"
 
 	"github.com/jupiterozeye/context/internal/clipboard"
@@ -12,6 +13,7 @@ import (
 var (
 	lastFormat string
 	lastNoCopy bool
+	lastPrint  bool
 )
 
 var lastCmd = &cobra.Command{
@@ -25,7 +27,8 @@ var lastCmd = &cobra.Command{
 func init() {
 	rootCmd.AddCommand(lastCmd)
 	lastCmd.Flags().StringVarP(&lastFormat, "format", "f", "raw", "Output format: raw|markdown|detailed")
-	lastCmd.Flags().BoolVarP(&lastNoCopy, "no-copy", "c", false, "Print only, don't copy to clipboard")
+	lastCmd.Flags().BoolVarP(&lastNoCopy, "no-copy", "c", false, "Don't copy to clipboard")
+	lastCmd.Flags().BoolVarP(&lastPrint, "print", "p", false, "Print output to terminal (default: just confirmation)")
 }
 
 func runLast(cmd *cobra.Command, args []string) error {
@@ -57,13 +60,24 @@ func runLast(cmd *cobra.Command, args []string) error {
 	}
 
 	formatted := reader.FormatEntries(entries)
-	fmt.Print(formatted)
 
+	// Copy to clipboard (unless --no-copy)
 	if !lastNoCopy {
 		if err := clipboard.Copy(formatted); err != nil {
-			return fmt.Errorf("failed to copy to clipboard: %w", err)
+			// Clipboard might not work in script session, just warn
+			fmt.Fprintf(os.Stderr, "Warning: could not copy to clipboard: %v\n", err)
+		} else {
+			if n == 1 {
+				fmt.Println("✓ Last command copied to clipboard")
+			} else {
+				fmt.Printf("✓ Last %d commands copied to clipboard\n", n)
+			}
 		}
-		fmt.Println("\nCopied to clipboard!")
+	}
+
+	// Print output only if --print flag is set
+	if lastPrint {
+		fmt.Print(formatted)
 	}
 
 	return nil
