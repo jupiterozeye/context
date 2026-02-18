@@ -88,10 +88,10 @@ Clipboard may not work inside the recorded session - use `--print` to see output
 ### `context rec` - Record session with full output
 
 Starts a recorded shell session where all commands and their output are captured.
-Each session is isolated from other terminals.
+Uses the standard `script` command for reliable capture.
 
 ```bash
-# Start recording
+# Start recording (creates 'typescript' file in current directory)
 context rec
 
 # Run your commands...
@@ -104,17 +104,13 @@ exit
 
 # Now get the captured commands with output
 context last
+
+# Clean up when done
+rm typescript
 ```
 
-**How it works:**
-- `context rec` starts a new shell with `CONTEXT_RECORDING=1`
-- Shell integration (if enabled in your config) captures every command and its output
-- Commands are logged to `~/.context/logs/<session_id>/`
-- `context last` reads from the current session's logs
-
-**Without shell integration:**
-If you don't have shell integration enabled, `context rec` won't capture anything.
-Install the integration first (see Setup below).
+**Note:** Creates a `typescript` file in the current directory. This file contains
+all terminal output including commands and their results.
 
 ### `context flush` - Clear all logs
 
@@ -127,9 +123,7 @@ context flush
 
 ### Setup
 
-**Required for `context rec` and `context last`:**
-
-Add shell integration to your config:
+Shell integration is **optional** and provides visual indicators when recording.
 
 **Bash:**
 ```bash
@@ -149,9 +143,8 @@ echo 'source /usr/local/share/context/shell/context.fish' >> ~/.config/fish/conf
 Then restart your terminal or run `source ~/.bashrc` (or `~/.zshrc`, etc.).
 
 **What it does:**
-- Captures command output using shell hooks (preexec/precmd)
-- Logs to session-specific directories
-- Auto-rotated (30-day retention, max 100MB)
+- Shows `[rec]` in prompt when recording
+- Purely cosmetic - recording works without it
 
 ## Examples
 
