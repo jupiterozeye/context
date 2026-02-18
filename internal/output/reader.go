@@ -179,7 +179,8 @@ func stripEscapeSequences(s string) string {
 	// OSC sequences with BEL terminator: ESC ] ... BEL
 	s = regexp.MustCompile("\x1b][^\x07]*\x07").ReplaceAllString(s, "")
 	// OSC sequences with ST terminator: ESC ] ... ESC \
-	s = regexp.MustCompile("\x1b]([^\x1b]|\x1b[^\\])*\x1b\\").ReplaceAllString(s, "")
+	// Need 4 backslashes in Go string to match literal \ in regex
+	s = regexp.MustCompile("\x1b][^\x07\x1b]*(?:\x07|\x1b\\\\)").ReplaceAllString(s, "")
 	// Remove orphaned ESC
 	s = strings.ReplaceAll(s, "\x1b", "")
 	s = strings.ReplaceAll(s, "\r", "")
