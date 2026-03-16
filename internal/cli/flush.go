@@ -27,11 +27,20 @@ func runFlush(cmd *cobra.Command, args []string) error {
 
 	logDir := filepath.Join(homeDir, ".context", "logs")
 	typescriptPath := filepath.Join(homeDir, ".context", "typescript")
+	sessionDir := filepath.Join(homeDir, ".context", "current-session")
 
-	// Remove typescript file
+	// Remove typescript file (legacy)
 	if err := os.Remove(typescriptPath); err != nil && !os.IsNotExist(err) {
 		fmt.Printf("Warning: could not remove typescript: %v\n", err)
 	}
+
+	// Remove current session
+	if err := os.RemoveAll(sessionDir); err != nil && !os.IsNotExist(err) {
+		fmt.Printf("Warning: could not remove session dir: %v\n", err)
+	}
+
+	// Remove cwd typescript (legacy)
+	os.Remove("typescript")
 
 	// Remove all log files
 	files, err := os.ReadDir(logDir)
@@ -50,6 +59,6 @@ func runFlush(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	fmt.Printf("✓ Flushed %d log files\n", count)
+	fmt.Printf("✓ Flushed %d log files and session data\n", count)
 	return nil
 }

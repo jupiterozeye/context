@@ -32,23 +32,42 @@ type Reader struct {
 	isRecording    bool
 }
 
+// OSC markers emitted by the shell hooks in context rec.
+var (
+	cmdMarkerRe = regexp.MustCompile("\x1b\\]7337;C;([^\x07]*)\x07")
+	endMarkerRe = regexp.MustCompile("\x1b\\]7337;D;([0-9]+)\x07")
+)
+
 // NewReader creates a new log reader
 func NewReader(opts Options) *Reader {
 	homeDir, _ := os.UserHomeDir()
 	isRecording := os.Getenv("CONTEXT_RECORDING") == "1"
-	
-	// Use typescript from current directory if recording
-	typescriptPath := filepath.Join(homeDir, ".context", "typescript")
-	if _, err := os.Stat("typescript"); err == nil {
-		// Check if this is our recording
-		if data, err := os.ReadFile("typescript"); err == nil {
-			if strings.Contains(string(data), "CONTEXT_SESSION") || isRecording {
-				typescriptPath = "typescript"
-				isRecording = true
+
+	sessionDir := os.Getenv("CONTEXT_SESSION_DIR")
+	if sessionDir == "" {
+		sessionDir = filepath.Join(homeDir, ".context", "current-session")
+	}
+
+	// Prefer session dir typescript
+	typescriptPath := filepath.Join(sessionDir, "typescript")
+	if _, err := os.Stat(typescriptPath); err == nil {
+		isRecording = true
+	} else if _, err := os.Stat(filepath.Join(sessionDir, "commands.log")); err == nil {
+		isRecording = true
+	} else {
+		// Fall back to typescript in cwd (legacy)
+		if _, err := os.Stat("typescript"); err == nil {
+			typescriptPath = "typescript"
+			if isRecording {
+				// Only use cwd typescript if env says we're recording
+			} else if data, err := os.ReadFile("typescript"); err == nil {
+				if strings.Contains(string(data), "CONTEXT_SESSION") {
+					isRecording = true
+				}
 			}
 		}
 	}
-	
+
 	return &Reader{
 		opts:           opts,
 		typescriptPath: typescriptPath,
@@ -67,131 +86,241 @@ func (r *Reader) Read(n int) ([]LogEntry, error) {
 		return nil, fmt.Errorf("not in a recorded session. run 'context rec' first")
 	}
 
-	// Try to read from typescript
-	if _, err := os.Stat(r.typescriptPath); err == nil {
-		entries, err := r.readFromTypescript(n)
-		if err == nil && len(entries) > 0 {
-			return entries, nil
-		}
-	}
-
-	return nil, fmt.Errorf("no commands recorded yet")
-}
-
-// readFromTypescript reads commands from script typescript
-func (r *Reader) readFromTypescript(n int) ([]LogEntry, error) {
-	content, err := os.ReadFile(r.typescriptPath)
-	if err != nil {
-		return nil, err
-	}
-
-	// Simple parsing: look for command lines (lines starting with prompt patterns)
-	lines := strings.Split(string(content), "\n")
-	
 	var entries []LogEntry
-	var currentCmd string
-	var outputLines []string
-	inOutput := false
-	
-	// Simple prompt patterns
-	cmdPattern := regexp.MustCompile(`^[\s]*[~\/]?[^❯]*❯\s+(.+)$|^\$\s+(.+)$|^%\s+(.+)$`)
-	
-	for _, line := range lines {
-		// Clean escape sequences
-		cleanLine := stripEscapeSequences(line)
-		trimmed := strings.TrimSpace(cleanLine)
-		
-		// Skip noise
-		if trimmed == "" || strings.HasPrefix(trimmed, "Script ") {
-			continue
-		}
-		
-		// Check for command
-		if matches := cmdPattern.FindStringSubmatch(cleanLine); matches != nil {
-			// Save previous command
-			if currentCmd != "" && len(outputLines) > 0 {
-				output := strings.TrimSpace(strings.Join(outputLines, "\n"))
-				// Filter out the next prompt from output
-				lines := strings.Split(output, "\n")
-				for len(lines) > 0 && isPromptLine(lines[len(lines)-1]) {
-					lines = lines[:len(lines)-1]
-				}
-				
-				entries = append(entries, LogEntry{
-					Command: currentCmd,
-					Output:  strings.TrimSpace(strings.Join(lines, "\n")),
-				})
-			}
-			
-			// Extract command
-			for i := 1; i < len(matches); i++ {
-				if matches[i] != "" {
-					currentCmd = strings.TrimSpace(matches[i])
-					break
-				}
-			}
-			
-			// Skip context commands
-			if strings.HasPrefix(currentCmd, "context ") && currentCmd != "context rec" {
-				currentCmd = ""
-				continue
-			}
-			
-			outputLines = nil
-			inOutput = true
-			continue
-		}
-		
-		if inOutput && currentCmd != "" {
-			outputLines = append(outputLines, cleanLine)
+
+	// Try typescript with OSC markers (has both commands and output)
+	if content, err := os.ReadFile(r.typescriptPath); err == nil {
+		entries = parseMarkers(string(content))
+
+		// Fall back to prompt-regex parsing (legacy typescript files)
+		if len(entries) == 0 {
+			entries = parsePrompts(string(content))
 		}
 	}
-	
-	// Save last command
-	if currentCmd != "" && len(outputLines) > 0 {
-		output := strings.TrimSpace(strings.Join(outputLines, "\n"))
-		lines := strings.Split(output, "\n")
-		for len(lines) > 0 && isPromptLine(lines[len(lines)-1]) {
-			lines = lines[:len(lines)-1]
-		}
-		
-		entries = append(entries, LogEntry{
-			Command: currentCmd,
-			Output:  strings.TrimSpace(strings.Join(lines, "\n")),
-		})
-	}
-	
+
+	// Fall back to commands.log (has commands but not output)
 	if len(entries) == 0 {
-		return nil, fmt.Errorf("no commands found")
+		logPath := filepath.Join(filepath.Dir(r.typescriptPath), "commands.log")
+		entries = parseCommandsLog(logPath)
 	}
-	
-	// Return last n
+
+	// Filter out context last/rec commands (but keep context dir, etc.)
+	var filtered []LogEntry
+	for _, e := range entries {
+		if isContextMetaCommand(e.Command) {
+			continue
+		}
+		filtered = append(filtered, e)
+	}
+	entries = filtered
+
+	if len(entries) == 0 {
+		return nil, fmt.Errorf("no commands recorded yet")
+	}
+
 	if n > len(entries) {
 		n = len(entries)
 	}
 	return entries[len(entries)-n:], nil
 }
 
+// parseMarkers extracts commands by finding OSC 7337 markers in the raw typescript.
+// The shell hooks emit C;command before execution and D;exitcode after.
+func parseMarkers(raw string) []LogEntry {
+	cmdMatches := cmdMarkerRe.FindAllStringSubmatchIndex(raw, -1)
+	if len(cmdMatches) == 0 {
+		return nil
+	}
+
+	endMatches := endMarkerRe.FindAllStringSubmatchIndex(raw, -1)
+
+	var entries []LogEntry
+	for _, cmdMatch := range cmdMatches {
+		cmdText := raw[cmdMatch[2]:cmdMatch[3]]
+		cmdText = strings.ReplaceAll(cmdText, "\\n", "\n")
+		cmdEnd := cmdMatch[1] // end of the C marker
+
+		// Find the next D marker after this C marker
+		var exitCode int
+		outputEnd := len(raw)
+		for _, endMatch := range endMatches {
+			if endMatch[0] > cmdEnd {
+				outputEnd = endMatch[0]
+				fmt.Sscanf(raw[endMatch[2]:endMatch[3]], "%d", &exitCode)
+				break
+			}
+		}
+
+		output := raw[cmdEnd:outputEnd]
+		output = cleanOutput(output)
+
+		entries = append(entries, LogEntry{
+			Command:  cmdText,
+			Output:   output,
+			ExitCode: exitCode,
+		})
+	}
+
+	return entries
+}
+
+// parseCommandsLog reads from the structured commands.log file written directly
+// by shell hooks. This is a reliable fallback when the typescript hasn't been
+// flushed yet — it provides command text and exit codes but not output.
+func parseCommandsLog(logPath string) []LogEntry {
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		return nil
+	}
+
+	lines := strings.Split(string(data), "\n")
+	var entries []LogEntry
+	var currentCmd string
+
+	for _, line := range lines {
+		if strings.HasPrefix(line, "C:") {
+			currentCmd = strings.TrimPrefix(line, "C:")
+		} else if strings.HasPrefix(line, "D:") && currentCmd != "" {
+			var exitCode int
+			fmt.Sscanf(strings.TrimPrefix(line, "D:"), "%d", &exitCode)
+			entries = append(entries, LogEntry{
+				Command:  currentCmd,
+				ExitCode: exitCode,
+			})
+			currentCmd = ""
+		}
+	}
+
+	return entries
+}
+
+// parsePrompts is the legacy parser that tries to detect commands by matching
+// common shell prompt patterns (❯, $, %) in the escape-stripped typescript.
+func parsePrompts(raw string) []LogEntry {
+	lines := strings.Split(raw, "\n")
+
+	var entries []LogEntry
+	var currentCmd string
+	var outputLines []string
+	inOutput := false
+
+	cmdPattern := regexp.MustCompile(`^[\s]*[~\/]?[^❯]*❯\s+(.+)$|^\$\s+(.+)$|^%\s+(.+)$`)
+
+	for _, line := range lines {
+		cleanLine := stripEscapeSequences(line)
+		trimmed := strings.TrimSpace(cleanLine)
+
+		if trimmed == "" || strings.HasPrefix(trimmed, "Script ") {
+			continue
+		}
+
+		if matches := cmdPattern.FindStringSubmatch(cleanLine); matches != nil {
+			if currentCmd != "" {
+				output := strings.TrimSpace(strings.Join(outputLines, "\n"))
+				outLines := strings.Split(output, "\n")
+				for len(outLines) > 0 && isPromptLine(outLines[len(outLines)-1]) {
+					outLines = outLines[:len(outLines)-1]
+				}
+
+				entries = append(entries, LogEntry{
+					Command: currentCmd,
+					Output:  strings.TrimSpace(strings.Join(outLines, "\n")),
+				})
+			}
+
+			for i := 1; i < len(matches); i++ {
+				if matches[i] != "" {
+					currentCmd = strings.TrimSpace(matches[i])
+					break
+				}
+			}
+
+			if isContextMetaCommand(currentCmd) {
+				currentCmd = ""
+				continue
+			}
+
+			outputLines = nil
+			inOutput = true
+			continue
+		}
+
+		if inOutput && currentCmd != "" {
+			outputLines = append(outputLines, cleanLine)
+		}
+	}
+
+	if currentCmd != "" && len(outputLines) > 0 {
+		output := strings.TrimSpace(strings.Join(outputLines, "\n"))
+		outLines := strings.Split(output, "\n")
+		for len(outLines) > 0 && isPromptLine(outLines[len(outLines)-1]) {
+			outLines = outLines[:len(outLines)-1]
+		}
+
+		entries = append(entries, LogEntry{
+			Command: currentCmd,
+			Output:  strings.TrimSpace(strings.Join(outLines, "\n")),
+		})
+	}
+
+	return entries
+}
+
 func stripEscapeSequences(s string) string {
-	// Remove ANSI escape codes
-	// CSI sequences: ESC [ ... letter
-	s = regexp.MustCompile("\x1b\\[[0-9;]*[a-zA-Z]").ReplaceAllString(s, "")
-	// OSC sequences with BEL terminator: ESC ] ... BEL
-	s = regexp.MustCompile("\x1b][^\x07]*\x07").ReplaceAllString(s, "")
-	// OSC sequences with ST terminator: ESC ] ... ESC \
-	// Need 4 backslashes in Go string to match literal \ in regex
+	// CSI sequences: ESC [ (params)(intermediates)(final byte)
+	// Handles sequences like ESC[0m, ESC[?2004h, ESC[0 q (cursor shape with space)
+	s = regexp.MustCompile("\x1b\\[[\x20-\x3f]*[\x40-\x7e]").ReplaceAllString(s, "")
+	// OSC sequences: ESC ] ... (BEL or ST terminator)
 	s = regexp.MustCompile("\x1b][^\x07\x1b]*(?:\x07|\x1b\\\\)").ReplaceAllString(s, "")
-	// Remove orphaned ESC
-	s = strings.ReplaceAll(s, "\x1b", "")
+	// DCS/PM/APC sequences: ESC P/^/_ ... ST
+	s = regexp.MustCompile("\x1b[P^_][^\x1b]*\x1b\\\\").ReplaceAllString(s, "")
+	// Remove orphaned ESC (and any single char after it)
+	s = regexp.MustCompile("\x1b.?").ReplaceAllString(s, "")
 	s = strings.ReplaceAll(s, "\r", "")
 	return s
+}
+
+// cleanOutput strips escape sequences and removes trailing shell prompt artifacts
+// like zsh's partial line indicator (PROMPT_SP: % or # on an otherwise empty line).
+func cleanOutput(s string) string {
+	s = stripEscapeSequences(s)
+	s = strings.TrimSpace(s)
+
+	lines := strings.Split(s, "\n")
+	for len(lines) > 0 {
+		last := strings.TrimSpace(lines[len(lines)-1])
+		if last == "%" || last == "#" || last == "" {
+			lines = lines[:len(lines)-1]
+		} else {
+			break
+		}
+	}
+
+	return strings.TrimSpace(strings.Join(lines, "\n"))
+}
+
+// isContextMetaCommand returns true for context subcommands that should be
+// filtered from output (last, rec) but NOT for useful commands like dir.
+func isContextMetaCommand(cmd string) bool {
+	parts := strings.Fields(cmd)
+	if len(parts) < 2 {
+		return false
+	}
+	base := filepath.Base(parts[0])
+	if base != "context" {
+		return false
+	}
+	switch parts[1] {
+	case "last", "rec", "flush":
+		return true
+	}
+	return false
 }
 
 func isPromptLine(line string) bool {
 	if strings.TrimSpace(line) == "" {
 		return false
 	}
-	// Common prompt endings
 	if regexp.MustCompile(`[~\/][^❯]*❯\s*$`).MatchString(line) {
 		return true
 	}
