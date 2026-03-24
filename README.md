@@ -1,3 +1,6 @@
+### IMPORTANT: THIS REPO HAS MIGRATED TO CODEBERG, AS MICROSOFT IS A TERRIBLE COMPANY THAT STEALS YOUR CODE. FOR NEWEST UPDATES PULL FROM THIS REMOTE:
+https://codeberg.org/ozeye/context
+
 # Context
 
 A simple CLI tool to capture and share terminal context with AI assistants.
